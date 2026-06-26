@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+testpaths = ["speedy_blinds/tests"]
+pythonpath = ["speedy_blinds"]
+addopts = "-v --tb=short"
