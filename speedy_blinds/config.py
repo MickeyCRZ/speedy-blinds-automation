@@ -130,6 +130,7 @@ SPEEDY_DEALER_SHEETS: dict[str, str] = {
     "Mathew":    "1oBayeMSr6VcroVqKSBLCe9bUqwoR1Peem9JEbpAeYeo",
     "Akash":     "1fZh-58DzPYMiGvXdPfw2TYPoWPPrsJhJZlqnHH8f3D4",
     "Joseph":    "12f1_iP6O_Rnp9Ze4bKbjF1zBMYeWxJFutvNc1OzZXb0",
+    "Nithin":    "1kstbKMPhgnf3vPuZ7EEpL8cJrgaLQdChEu5eJ5AGGNA",
 }
 
 # Fuzzy-match aliases (lowercase → canonical dealer name)
@@ -155,6 +156,7 @@ SPEEDY_DEALER_ALIASES: dict[str, str] = {
     "matthew":    "Mathew",
     "akash":      "Akash",
     "joseph":     "Joseph",
+    "nithin":     "Nithin",
 }
 
 # ---------------------------------------------------------------------------
