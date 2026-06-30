@@ -146,11 +146,21 @@ def fetch_order_details(order_number: str, token: str) -> Optional[dict]:
                 lines = order.get("lines", [])
                 blind_count = 0
                 for line in (lines if isinstance(lines, list) else []):
-                    # qty per line — defaults to 1 if missing/null
-                    qty = int(line.get("qty") or line.get("quantity") or 1)
-                    # split = each blind in this line is in 2 halves → counts as 2 installs per blind
-                    split_val = line.get("split") or line.get("is_split") or line.get("split_blind") or False
-                    is_split = str(split_val).strip().lower() in ("true", "yes", "1") if not isinstance(split_val, bool) else bool(split_val)
+                    # 'quantity' is the confirmed ERP field name
+                    qty = int(line.get("quantity") or 1)
+
+                    # Split option lives inside the 'attributes' list as a key-value object.
+                    # We search for any attribute whose name contains "split" and value is truthy.
+                    is_split = False
+                    for attr in (line.get("attributes") or []):
+                        if isinstance(attr, dict):
+                            attr_name = str(attr.get("name") or attr.get("label") or attr.get("key") or "").lower()
+                            attr_val  = str(attr.get("value") or "").strip().lower()
+                            if "split" in attr_name and attr_val in ("yes", "true", "1"):
+                                is_split = True
+                                break
+
+                    # split blind = each blind in line is 2 halves → 2 installs per blind
                     blind_count += qty * 2 if is_split else qty
 
 

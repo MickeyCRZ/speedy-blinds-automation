@@ -83,6 +83,24 @@ def inspect(company_key: str) -> None:
             for k, v in sorted(first_line.items()):
                 v_str = repr(v) if len(repr(v)) <= 100 else f"[{type(v).__name__}, len={len(str(v))}]"
                 print(f"    {k:40s} = {v_str}")
+
+            # Print sample attributes to find split field
+            attrs = first_line.get("attributes", [])
+            if attrs and isinstance(attrs, list):
+                print(f"\n  ATTRIBUTES (first 10 of {len(attrs)}):" )
+                for attr in attrs[:10]:
+                    print(f"    {repr(attr)}")
+
+                # Search specifically for any split-related attribute
+                print(f"\n  SPLIT-RELATED ATTRIBUTES (searching all {len(attrs)}):" )
+                found_split = False
+                for attr in attrs:
+                    attr_str = str(attr).lower()
+                    if "split" in attr_str:
+                        print(f"    FOUND: {repr(attr)}")
+                        found_split = True
+                if not found_split:
+                    print("    (no attribute containing 'split' found)")
             break
 
     # --- Highlighted summary ---
