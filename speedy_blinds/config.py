@@ -154,6 +154,7 @@ SPEEDY_DEALER_ALIASES: dict[str, str] = {
     "shawn":      "Shawn",
     "mathew":     "Mathew",
     "matthew":    "Mathew",
+    "sneha":      "Mathew",   # Sneha = Mathew (same dealer)
     "akash":      "Akash",
     "joseph":     "Joseph",
     "nithin":     "Nithin",
