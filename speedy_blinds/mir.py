@@ -149,19 +149,24 @@ def fetch_order_details(order_number: str, token: str) -> Optional[dict]:
                     # 'quantity' is the confirmed ERP field name
                     qty = int(line.get("quantity") or 1)
 
-                    # Split option lives inside the 'attributes' list as a key-value object.
-                    # We search for any attribute whose name contains "split" and value is truthy.
+                    # Split option lives inside the 'attributes' list.
+                    # Confirmed ERP structure: {'field_key': 'split_option', 'field_label': 'Split Option', 'value': 'no', 'label': 'No'}
                     is_split = False
                     for attr in (line.get("attributes") or []):
                         if isinstance(attr, dict):
-                            attr_name = str(attr.get("name") or attr.get("label") or attr.get("key") or "").lower()
-                            attr_val  = str(attr.get("value") or "").strip().lower()
+                            attr_name = str(
+                                attr.get("field_key") or attr.get("field_label") or ""
+                            ).lower().replace("_", " ")
+                            attr_val = str(
+                                attr.get("value") or attr.get("label") or ""
+                            ).strip().lower()
                             if "split" in attr_name and attr_val in ("yes", "true", "1"):
                                 is_split = True
                                 break
 
                     # split blind = each blind in line is 2 halves → 2 installs per blind
                     blind_count += qty * 2 if is_split else qty
+
 
 
                 dealer_raw  = order.get("dealer") or {}

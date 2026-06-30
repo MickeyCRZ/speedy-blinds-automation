@@ -28,15 +28,18 @@ erp._SESSION.request = _safe_request
 def find_split_in_attributes(attrs: list) -> tuple[bool, str]:
     """
     Search an attributes list for a Split Option entry.
+    Attribute structure: {'field_key': 'split_option', 'field_label': 'Split Option', 'value': 'no', 'label': 'No'}
     Returns (is_split, matched_attr_repr).
     """
     for attr in attrs:
         if not isinstance(attr, dict):
             continue
+        # Use confirmed ERP field names: field_key and field_label
         attr_name = str(
-            attr.get("name") or attr.get("label") or attr.get("key") or ""
-        ).lower()
-        attr_val = str(attr.get("value") or "").strip().lower()
+            attr.get("field_key") or attr.get("field_label") or ""
+        ).lower().replace("_", " ")
+        # Value can be in 'value' (raw) or 'label' (human-readable)
+        attr_val = str(attr.get("value") or attr.get("label") or "").strip().lower()
         if "split" in attr_name:
             is_split = attr_val in ("yes", "true", "1")
             return is_split, repr(attr)
@@ -130,9 +133,9 @@ def inspect(company_key: str) -> None:
         attrs = first_line.get("attributes", [])
         print(f"    attributes  : {len(attrs)} total")
 
-        # Print first 8 attributes as sample
-        print(f"\n    First 8 attributes:")
-        for attr in attrs[:8]:
+        # Print ALL attributes so we can see the split one
+        print(f"\n    ALL {len(attrs)} attributes:")
+        for attr in attrs:
             print(f"      {repr(attr)}")
 
         # Find Split Option specifically
