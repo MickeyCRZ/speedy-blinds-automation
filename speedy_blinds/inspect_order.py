@@ -75,12 +75,14 @@ def inspect(company_key: str) -> None:
         print(f"    {k:40s} = {v_str}{marker}")
 
     # --- Print sub-items if present ---
-    for items_key in ("items", "order_items", "line_items", "products"):
+    for items_key in ("items", "order_items", "line_items", "products", "lines"):
         if items_key in order and isinstance(order[items_key], list) and order[items_key]:
-            print(f"\n  FIRST ITEM in order['{items_key}']:")
-            for k, v in sorted(order[items_key][0].items()):
-                marker = "  ◄◄◄ CANDIDATE" if k in FIELDS_OF_INTEREST else ""
-                print(f"    {k:40s} = {repr(v)}{marker}")
+            first_line = order[items_key][0]
+            print(f"\n  FIRST ITEM in order['{items_key}'] ({len(order[items_key])} total items):")
+            print(f"  Fields inside each line ({len(first_line)} keys):")
+            for k, v in sorted(first_line.items()):
+                v_str = repr(v) if len(repr(v)) <= 100 else f"[{type(v).__name__}, len={len(str(v))}]"
+                print(f"    {k:40s} = {v_str}")
             break
 
     # --- Highlighted summary ---

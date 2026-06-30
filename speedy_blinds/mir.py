@@ -143,8 +143,16 @@ def fetch_order_details(order_number: str, token: str) -> Optional[dict]:
         for order in orders:
             erp_num = str(order.get("order_number", "")).strip()
             if _norm(erp_num) == target:
-                lines      = order.get("lines", [])
-                blind_count = len(lines) if isinstance(lines, list) else 0
+                lines = order.get("lines", [])
+                blind_count = 0
+                for line in (lines if isinstance(lines, list) else []):
+                    # qty per line — defaults to 1 if missing/null
+                    qty = int(line.get("qty") or line.get("quantity") or 1)
+                    # split blind counts as 2 installs (+1 extra)
+                    split_val = line.get("split") or line.get("is_split") or line.get("split_blind") or False
+                    is_split = str(split_val).strip().lower() in ("true", "yes", "1") if not isinstance(split_val, bool) else bool(split_val)
+                    blind_count += qty + (1 if is_split else 0)
+
                 dealer_raw  = order.get("dealer") or {}
                 dealer_name = dealer_raw.get("name", "Unknown") if isinstance(dealer_raw, dict) else str(dealer_raw)
                 return {
