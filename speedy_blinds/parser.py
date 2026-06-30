@@ -48,10 +48,12 @@ def _get_system_prompt() -> str:
         - customer_name, qty, motors, remotes, solars, chargers as seen in message.
 
         Rules for REWORKS (type="rework"):
-        - Reworks look like: RW133-Phil-$50  or  RW 45 - Alen - 30  or similar variations.
+        - Reworks look like: RW133-Phil-$50  or  RW 45 - Alen - 30  or  RW136 Mike -$176.4
         - order_number: keep as-is with RW prefix, e.g. "RW133". Do NOT convert to ORD-.
-        - dealer: resolve from the name after the first dash.
-        - amount: the dollar amount after the second dash (strip $ symbol).
+        - dealer: resolve from the name in the entry.
+        - amount: the dollar amount (ALWAYS positive — hyphens between fields are SEPARATORS, not minus signs).
+          Examples: "RW136 Mike -$176.4" → amount=176.4  |  "RW137 vtt -$30" → amount=30
+          If the text says "no charge" or similar → amount=0.
         - customer_name: null.
         - qty: null.
         - motors, remotes, solars, chargers: null.
@@ -152,8 +154,16 @@ def parse_orders(raw_text: str) -> list[dict]:
             if o_num and not o_num.upper().startswith("RW"):
                 digits = re.sub(r"\D", "", o_num)
                 order["order_number"] = f"RW{digits}" if digits else o_num
-            # Rework price comes from the text (stored in amount) — copy to price
-            order["price"] = order.get("amount")
+            # Rework price comes from the text — always positive (hyphens are separators)
+            raw_amt = order.get("amount")
+            if raw_amt is not None:
+                try:
+                    order["amount"] = abs(float(raw_amt))
+                except (TypeError, ValueError):
+                    order["amount"] = 0.0
+            else:
+                order["amount"] = 0.0
+            order["price"] = order["amount"]
         else:
             # Regular order: normalise to ORD-XXXX
             if o_num and o_num.lower() != "none":
