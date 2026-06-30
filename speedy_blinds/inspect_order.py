@@ -1,7 +1,9 @@
 """
-inspect_order.py — Diagnostic: print raw ERP order fields
+inspect_order.py — Diagnostic: print raw ERP order fields + verify Split Option detection
 Run: python3 inspect_order.py
-Fetches one real order from each ERP and prints key fields.
+
+IMPORTANT: This script uses ONLY HTTP GET requests. It never POSTs, PATCHes,
+           PUTs, or DELETEs anything. It is 100% read-only against the ERP.
 """
 import json
 import sys
@@ -11,22 +13,44 @@ sys.path.insert(0, os.path.dirname(__file__))
 import config
 import erp
 
-# Fields we care about for MIR blind-qty detection
-FIELDS_OF_INTEREST = {
-    "qty", "quantity", "items_count", "total_items",
-    "item_count", "blind_count", "blinds", "count",
-    "total_qty", "total_quantity", "no_of_blinds",
-    "order_number", "total_price", "dealer",
-}
+# Verify erp._SESSION only ever GETs — patch to intercept any non-GET attempt
+_original_request = erp._SESSION.request
+def _safe_request(method, url, **kwargs):
+    if method.upper() != "GET":
+        raise RuntimeError(
+            f"🚨 BLOCKED: Attempted {method.upper()} to {url}. "
+            "inspect_order.py is read-only — no writes allowed."
+        )
+    return _original_request(method, url, **kwargs)
+erp._SESSION.request = _safe_request
+
+
+def find_split_in_attributes(attrs: list) -> tuple[bool, str]:
+    """
+    Search an attributes list for a Split Option entry.
+    Returns (is_split, matched_attr_repr).
+    """
+    for attr in attrs:
+        if not isinstance(attr, dict):
+            continue
+        attr_name = str(
+            attr.get("name") or attr.get("label") or attr.get("key") or ""
+        ).lower()
+        attr_val = str(attr.get("value") or "").strip().lower()
+        if "split" in attr_name:
+            is_split = attr_val in ("yes", "true", "1")
+            return is_split, repr(attr)
+    return False, "(not found)"
 
 
 def inspect(company_key: str) -> None:
     config.set_company(company_key)
     label = config.ACTIVE_COMPANY_LABEL
-    print(f"\n{'='*60}")
-    print(f"  Company : {label}")
-    print(f"  ERP URL : {config.ERP_BASE_URL}")
-    print(f"{'='*60}")
+    print(f"\n{'='*65}")
+    print(f"  Company  : {label}")
+    print(f"  ERP URL  : {config.ERP_BASE_URL}")
+    print(f"  HTTP mode: GET ONLY ✓")
+    print(f"{'='*65}")
 
     try:
         token = erp.get_token()
@@ -38,11 +62,15 @@ def inspect(company_key: str) -> None:
         "Authorization": f"Bearer {token}",
         "X-Active-Tenant-Id": str(config.ERP_TENANT_IDS[0]),
     }
-    params = {"per_page": 1}
+    # Fetch first 5 orders so we're likely to find a split one
+    params = {"per_page": 5}
     url = f"{config.ERP_BASE_URL}/admin/orders"
 
     try:
         resp = erp._SESSION.get(url, headers=headers, params=params, timeout=20)
+    except RuntimeError as e:
+        print(f"  ✗ {e}")
+        return
     except Exception as e:
         print(f"  ✗ Request failed: {e}")
         return
@@ -52,69 +80,72 @@ def inspect(company_key: str) -> None:
         return
 
     body = resp.json()
-    # Handle both list and {"data": [...]} shapes
     data = body.get("data", body) if isinstance(body, dict) else body
     if not isinstance(data, list) or not data:
-        print(f"  ✗ No orders in response. Raw: {str(body)[:300]}")
+        print(f"  ✗ No orders returned.")
         return
 
-    order = data[0]
-    order_num = order.get("order_number", "?")
-    print(f"\n  ✓ Order fetched : {order_num}")
-    print(f"  Total keys      : {len(order)}")
+    print(f"\n  Fetched {len(data)} order(s) for analysis.\n")
 
-    # --- Print ALL fields ---
-    print(f"\n  ALL FIELDS:")
-    for k, v in sorted(order.items()):
-        # Skip long nested objects for readability
-        if isinstance(v, (dict, list)) and len(str(v)) > 80:
-            v_str = f"[{type(v).__name__}, len={len(v)}]"
+    # Analyse each order's lines for split detection
+    for order in data:
+        order_num  = order.get("order_number", "?")
+        dealer_raw = order.get("dealer") or {}
+        dealer     = dealer_raw.get("name", "?") if isinstance(dealer_raw, dict) else str(dealer_raw)
+        lines      = order.get("lines", [])
+
+        print(f"  Order: {order_num}  |  Dealer: {dealer}  |  Lines: {len(lines)}")
+
+        blind_count = 0
+        split_lines = []
+
+        for i, line in enumerate(lines):
+            qty      = int(line.get("quantity") or 1)
+            attrs    = line.get("attributes") or []
+            is_split, match = find_split_in_attributes(attrs)
+            count    = qty * 2 if is_split else qty
+            blind_count += count
+
+            if is_split:
+                split_lines.append((i + 1, qty, match))
+
+        print(f"    → Blind count (MIR logic): {blind_count}")
+
+        if split_lines:
+            print(f"    → Split lines found ({len(split_lines)}):")
+            for line_num, qty, attr_repr in split_lines:
+                print(f"       Line {line_num}: qty={qty}, split attr = {attr_repr}")
         else:
-            v_str = repr(v)
-        marker = "  ◄◄◄ CANDIDATE" if k in FIELDS_OF_INTEREST else ""
-        print(f"    {k:40s} = {v_str}{marker}")
+            print(f"    → No split lines in this order")
+        print()
 
-    # --- Print sub-items if present ---
-    for items_key in ("items", "order_items", "line_items", "products", "lines"):
-        if items_key in order and isinstance(order[items_key], list) and order[items_key]:
-            first_line = order[items_key][0]
-            print(f"\n  FIRST ITEM in order['{items_key}'] ({len(order[items_key])} total items):")
-            print(f"  Fields inside each line ({len(first_line)} keys):")
-            for k, v in sorted(first_line.items()):
-                v_str = repr(v) if len(repr(v)) <= 100 else f"[{type(v).__name__}, len={len(str(v))}]"
-                print(f"    {k:40s} = {v_str}")
+    # --- Detailed inspection of first order's first line ---
+    first_order = data[0]
+    lines = first_order.get("lines", [])
+    if lines:
+        first_line = lines[0]
+        print(f"  ── Detailed first line of {first_order.get('order_number')} ──────")
+        print(f"    quantity    = {first_line.get('quantity')}")
+        print(f"    product     = {first_line.get('product')}")
+        attrs = first_line.get("attributes", [])
+        print(f"    attributes  : {len(attrs)} total")
 
-            # Print sample attributes to find split field
-            attrs = first_line.get("attributes", [])
-            if attrs and isinstance(attrs, list):
-                print(f"\n  ATTRIBUTES (first 10 of {len(attrs)}):" )
-                for attr in attrs[:10]:
-                    print(f"    {repr(attr)}")
+        # Print first 8 attributes as sample
+        print(f"\n    First 8 attributes:")
+        for attr in attrs[:8]:
+            print(f"      {repr(attr)}")
 
-                # Search specifically for any split-related attribute
-                print(f"\n  SPLIT-RELATED ATTRIBUTES (searching all {len(attrs)}):" )
-                found_split = False
-                for attr in attrs:
-                    attr_str = str(attr).lower()
-                    if "split" in attr_str:
-                        print(f"    FOUND: {repr(attr)}")
-                        found_split = True
-                if not found_split:
-                    print("    (no attribute containing 'split' found)")
-            break
-
-    # --- Highlighted summary ---
-    print(f"\n  ── KEY CANDIDATES ──────────────────────────────")
-    found_any = False
-    for field in sorted(FIELDS_OF_INTEREST):
-        if field in order:
-            print(f"    {field:40s} = {repr(order[field])}")
-            found_any = True
-    if not found_any:
-        print("    (none of the candidate fields were present at top level)")
+        # Find Split Option specifically
+        is_split, match = find_split_in_attributes(attrs)
+        print(f"\n    Split Option detection:")
+        print(f"      matched attr : {match}")
+        print(f"      is_split     : {is_split}")
+        print(f"      blind count  : {first_line.get('quantity', 1) * (2 if is_split else 1)}")
 
 
 if __name__ == "__main__":
+    print("\n🔍 ERP Field Inspector — READ-ONLY (GET requests only)")
+    print("=" * 65)
     inspect("speedy")
     print()
     inspect("inspira")
