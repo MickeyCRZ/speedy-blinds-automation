@@ -50,51 +50,60 @@ from datetime import datetime
 
 def _order_to_row(order: dict) -> list:
     """
-    Convert an order dict to a list matching columns B–G:
+    Convert an order or rework dict to a list matching columns B–G:
         B: Month
         C: Date
-        D: Order Number (ORD-XXXX)
-        E: Customer Name
-        F: Qty (No. of blinds)
-        G: Total Cost (Price from ERP)
+        D: Order Number (ORD-XXXX for orders, RW### for reworks)
+        E: Customer Name  (blank for reworks)
+        F: Qty            (blank for reworks)
+        G: Total Cost     (ERP price for orders, text price for reworks)
     """
+    is_rework = str(order.get("type") or "").lower() == "rework"
+
     raw_date = str(order.get("date") or "").strip()
     month_str = ""
     date_str = raw_date
-    
+
     if raw_date:
         try:
-            # Assume YYYY-MM-DD from parser
             d = datetime.strptime(raw_date, "%Y-%m-%d")
             month_str = d.strftime("%B")
             date_str = f"{d.day}-{d.strftime('%B-%Y')}"
         except ValueError:
             pass
-            
+
     order_num = str(order.get("order_number") or "").strip()
-    if order_num and not order_num.upper().startswith("ORD-"):
-        if order_num.isdigit():
-            order_num = f"ORD-{int(order_num):04d}"
-        else:
-            order_num = f"ORD-{order_num}"
-            
-    customer_name = str(order.get("customer_name") or "").strip().title()
-    if order.get("unknown_dealer_fallback") and order.get("original_dealer"):
-        customer_name = f"{customer_name} (Dealer: {order.get('original_dealer')})"
+    if not is_rework:
+        # Regular orders: ensure ORD-XXXX format
+        if order_num and not order_num.upper().startswith("ORD-"):
+            if order_num.isdigit():
+                order_num = f"ORD-{int(order_num):04d}"
+            else:
+                order_num = f"ORD-{order_num}"
+
+    if is_rework:
+        customer_name = ""   # reworks have no customer
+        qty_val       = ""   # reworks have no qty
+    else:
+        customer_name = str(order.get("customer_name") or "").strip().title()
+        if order.get("unknown_dealer_fallback") and order.get("original_dealer"):
+            customer_name = f"{customer_name} (Dealer: {order.get('original_dealer')})"
+        qty_val = order.get("qty") if order.get("qty") is not None else ""
 
     dealer = order.get("dealer")
     base_row = [
         date_str,
         order_num,
         customer_name,
-        order.get("qty") if order.get("qty") is not None else "",
+        qty_val,
         order.get("price") if order.get("price") is not None else "",
     ]
-    
+
     if dealer in ["Phil", "Alen"]:
         return [month_str, ""] + base_row
     else:
         return [month_str] + base_row
+
 
 
 def _highlight_range_red(service, sheet_id: str, updated_range: str) -> None:

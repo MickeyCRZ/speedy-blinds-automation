@@ -287,10 +287,10 @@ def enrich_orders(orders: list[dict]) -> list[dict]:
         """Fan out lookups, return (order→price map, list of 401 errors)."""
         prices: dict = {}
         errors: list = []
-        with ThreadPoolExecutor(max_workers=min(10, len(orders))) as pool:
+        with ThreadPoolExecutor(max_workers=min(10, len(erp_orders))) as pool:
             future_to_order = {
                 pool.submit(fetch_price, order.get("order_number", ""), token): order
-                for order in orders
+                for order in erp_orders
             }
             for future in as_completed(future_to_order):
                 order = future_to_order[future]
@@ -304,25 +304,35 @@ def enrich_orders(orders: list[dict]) -> list[dict]:
                     prices[id(order)] = None
         return prices, errors
 
+    # Rework entries already have price from the WhatsApp text — skip ERP lookup for them
+    erp_orders    = [o for o in orders if o.get("type") != "rework"]
+    rework_orders = [o for o in orders if o.get("type") == "rework"]
+
+    if not erp_orders:
+        print("  ℹ️  No regular orders to look up in ERP (reworks skipped).")
+        return orders
+
     token = get_token()
-    print(f"  🔍 Looking up prices for {len(orders)} order(s) across "
+    print(f"  🔍 Looking up prices for {len(erp_orders)} order(s) across "
           f"{len(config.ERP_TENANT_IDS)} tenant(s) on {config.ERP_BASE_URL}...")
 
     prices, errors = _run_lookups(token)
 
-    # If ALL lookups returned 401 (stale cached token), force fresh login & retry
-    if errors and len(errors) == len(orders):
+    # If ALL ERP lookups returned 401 (stale token), force fresh login & retry
+    if errors and len(errors) == len(erp_orders):
         print("  🔄 Token rejected (401) — forcing fresh login and retrying...")
-        # Clear cached token to force _login()
         _write_token_to_env("", "")
         token = _login()
         prices, _ = _run_lookups(token)
 
-    for order in orders:
+    for order in erp_orders:
         order["price"] = prices.get(id(order))
 
-    found = sum(1 for o in orders if o.get("price") is not None)
-    missing = len(orders) - found
-    print(f"  ✓ Prices resolved: {found} found, {missing} not found in ERP")
+    found = sum(1 for o in erp_orders if o.get("price") is not None)
+    missing = len(erp_orders) - found
+    if rework_orders:
+        print(f"  ✓ Prices resolved: {found} found, {missing} not found in ERP  |  {len(rework_orders)} rework(s) skipped (price from text)")
+    else:
+        print(f"  ✓ Prices resolved: {found} found, {missing} not found in ERP")
 
     return orders

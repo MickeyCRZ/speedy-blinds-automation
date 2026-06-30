@@ -120,22 +120,27 @@ def read_input(file_path: str | None) -> str:
 def display_orders(orders: list[dict]) -> None:
     rows = []
     for i, o in enumerate(orders, 1):
+        is_rework = str(o.get("type") or "").lower() == "rework"
         amount = f"${o['amount']:.2f}" if o.get("amount") is not None else "—"
-        price  = f"${o['price']:.2f}"  if o.get("price")  is not None else RED("NOT FOUND")
+        if is_rework:
+            # Rework price comes from WhatsApp text (stored in price = amount)
+            price = CYAN(f"${o['price']:.2f} [RW]") if o.get("price") is not None else YELLOW("—")
+        else:
+            price = f"${o['price']:.2f}" if o.get("price") is not None else RED("NOT FOUND")
         rows.append([
             i,
             o.get("dealer")        or RED("UNKNOWN"),
             o.get("date")          or "—",
             o.get("order_number")  or "—",
-            o.get("customer_name") or "—",
-            o.get("qty")           or "—",
+            o.get("customer_name") or ("—" if not is_rework else ""),
+            o.get("qty")           or ("—" if not is_rework else ""),
             amount,
             price,
         ])
     print()
     print(tabulate(
         rows,
-        headers=["#", "Dealer", "Date", "Order #", "Customer", "Qty", "Amount", "Price (ERP)"],
+        headers=["#", "Dealer", "Date", "Order #", "Customer", "Qty", "Amount", "Price (ERP/Text)"],
         tablefmt="rounded_outline",
     ))
     print()
