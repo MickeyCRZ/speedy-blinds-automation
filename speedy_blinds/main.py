@@ -21,6 +21,7 @@ import notifier
 import parser as order_parser
 import sheets
 import config
+import mir
 from notifier import RunReport
 
 
@@ -44,6 +45,21 @@ def banner(company_label: str = ""):
 ║   Dealer Order Automation{tag:<26}║
 ╚══════════════════════════════════════════════════╨
 """)))
+
+
+def choose_mode() -> str:
+    """Prompt the user to select a mode. Returns 'orders' or 'mir'."""
+    print(BOLD("What would you like to do?"))
+    print("  [1] Process WhatsApp Orders")
+    print("  [2] MIR Calculate")
+    print()
+    while True:
+        raw = input("Enter number or mode (orders/mir): ").strip().lower()
+        if raw in ("1", "orders", "order", "whatsapp"):
+            return "orders"
+        if raw in ("2", "mir", "mir calculate", "calculate"):
+            return "mir"
+        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1 or 2."))
 
 
 def choose_company() -> str:
@@ -164,29 +180,8 @@ def confirm_orders(orders: list[dict]) -> list[dict]:
     return approved
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="Push WhatsApp order completions to dealer Google Sheets."
-    )
-    parser.add_argument(
-        "--file", "-f",
-        metavar="PATH",
-        help="Path to a .txt file containing WhatsApp order text",
-    )
-    parser.add_argument(
-        "--no-confirm",
-        action="store_true",
-        help="Skip per-order confirmation and push everything automatically",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Parse orders and fetch ERP prices but do NOT write to Google Sheets",
-    )
-    args = parser.parse_args()
-
-    banner()
-
+def _run_order_mode(args) -> None:
+    """Run the existing WhatsApp order processing workflow."""
     # ── Company selection ─────────────────────────────────────────────────────
     company_key = choose_company()
     config.set_company(company_key)
@@ -276,7 +271,6 @@ def main():
         except ValueError as e:
             err_str = str(e)
             if "No spreadsheet ID configured" in err_str:
-                # Unknown dealer — save to file instead of silently dropping
                 print(YELLOW(f"  ⚠️  Unknown dealer '{dealer}' — saving to unmatched_orders.json"))
                 unmatched.append(order)
                 report.unmatched_dealers.append(order)
@@ -309,6 +303,44 @@ def main():
     print(YELLOW("\n📣 Sending notifications..."))
     report.dispatch()
 
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Push WhatsApp order completions to dealer Google Sheets."
+    )
+    parser.add_argument(
+        "--file", "-f",
+        metavar="PATH",
+        help="Path to a .txt file containing WhatsApp order text",
+    )
+    parser.add_argument(
+        "--no-confirm",
+        action="store_true",
+        help="Skip per-order confirmation and push everything automatically",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse orders and fetch ERP prices but do NOT write to Google Sheets",
+    )
+    args = parser.parse_args()
+
+    banner()
+
+    # ── Mode selection ────────────────────────────────────────────────────────
+    mode = choose_mode()
+    print()
+
+    if mode == "mir":
+        # MIR mode: select company first, then run MIR
+        company_key = choose_company()
+        config.set_company(company_key)
+        company_label = config.COMPANY[company_key]["label"]
+        print(GREEN(f"\n✓ Company set to: {company_label}"))
+        print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
+        mir.run_mir(dry_run=args.dry_run)
+    else:
+        _run_order_mode(args)
 
 if __name__ == "__main__":
     main()
