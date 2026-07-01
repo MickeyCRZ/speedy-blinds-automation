@@ -134,8 +134,9 @@ class RunReport:
             print("  ⚠️  Email notification skipped — NOTIFY_EMAIL_* not set in .env")
             return
 
+        today = self.started_at.strftime("%Y-%m-%d")
         subject = (
-            f"[{config.ACTIVE_COMPANY_LABEL}] Run complete — "
+            f"[{config.ACTIVE_COMPANY_LABEL}] {today} — "
             f"{len(self.written)} written"
             + (" ⚠ Issues" if self.has_issues else " ✓ All good")
         )
