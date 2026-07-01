@@ -417,6 +417,9 @@ class RunReport:
             cards.append(
                 f'<div style="background:#1b5e3b;border-radius:14px;'
                 f'padding:16px 18px;margin:10px 0;color:#fff;">'
+                f'<div style="font-size:11px;opacity:0.65;text-transform:uppercase;'
+                f'letter-spacing:0.08em;margin-bottom:4px;">'
+                f'{config.ACTIVE_COMPANY_LABEL}</div>'
                 f'<div style="font-weight:700;font-size:16px;margin-bottom:12px;">'
                 f'{pretty_date}</div>'
                 f'{rows_html}'
