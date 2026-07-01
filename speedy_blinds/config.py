@@ -172,6 +172,7 @@ INSPIRA_DEALER_SHEETS: dict[str, str] = {
     "Surinder":  "1fTMRPODsdmyXPbjgRRTr_2oOOtv_WWlS-N9fwisvv8Y",
     "AJ":        "1pM0QWHUHF2DQ0STfjUflOaEz_-pxmA-RRS_kJzUjVlA",
     "Sidhu":     "1qb1y18Z8H3zYLkDCeJ161mxr0EG9Vxhn5MT94jJVOEQ",
+    "Navtej":    "1Blk9GJYIIgbCTBUUEJCPIhBJd9ZSuQvTtCQZyQdDfOo",
 }
 
 INSPIRA_DEALER_ALIASES: dict[str, str] = {
@@ -189,6 +190,7 @@ INSPIRA_DEALER_ALIASES: dict[str, str] = {
     "surinder":     "Surinder",
     "aj":           "AJ",
     "sidhu":        "Sidhu",
+    "navtej":       "Navtej",
 }
 
 # Active defaults (overridden by set_company() at runtime)
