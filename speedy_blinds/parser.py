@@ -61,6 +61,7 @@ def _get_system_prompt() -> str:
         General rules:
         - If a field cannot be determined, use null.
         - Dates must always be YYYY-MM-DD. If only day and month given (e.g. "9 June"), assume year 2026.
+        - IMPORTANT: If a date appears as a header or summary line in the message (e.g. "July 2, 2026" or "2 July" or "02/07"), treat it as the date for ALL orders in that message unless a specific order has its own date explicitly attached to it. Never default to today's date — always use the date stated in the message.
         - Dealer name must exactly match one of the allowed values (case-sensitive).
         - If the dealer name in the message is a known alias/abbreviation (e.g. "vtt" → "VT Thomas"), resolve it.
         - Strip any currency symbols from amount.
