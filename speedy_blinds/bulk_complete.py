@@ -1,22 +1,27 @@
 """
 bulk_complete.py — Mode 3: Bulk Mark Orders Completed
 ======================================================
-Fetches all orders from the ERP that are NOT yet completed and offers
-to mark them completed in bulk, with a clear confirmation step.
-
-Called from main.py when user selects [3].
+Flow:
+  1. User pastes any raw order number text (e.g. "ON 121 122 ORD-0123 124")
+  2. Groq normalises them to ORD-XXXX format
+  3. ERP GET fetches each order's id + current status
+  4. Already-completed orders are shown and skipped
+  5. User types 'yes' to PATCH remaining ones → completed
+  6. Every PATCH logged to erp_updates.log
 """
 
 from __future__ import annotations
 
+import json
 import re
 import sys
-from datetime import datetime, date
 
+from groq import Groq
 from tabulate import tabulate
 
 import erp
 import config
+from config import GROQ_API_KEY, GROQ_MODEL
 
 
 # ── ANSI colours ─────────────────────────────────────────────────────────────
@@ -32,113 +37,201 @@ BOLD   = lambda t: _c("1",  t)
 CYAN   = lambda t: _c("36", t)
 
 
-def _parse_date(s: str) -> date | None:
-    """Accept YYYY-MM-DD or DD-MM-YYYY or DD/MM/YYYY."""
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
-        try:
-            return datetime.strptime(s.strip(), fmt).date()
-        except ValueError:
-            continue
+# ── Groq normalisation ────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = """
+You are an order-number extraction assistant.
+Extract EVERY order number from the user's text and normalise each to ORD-XXXX format.
+
+Rules:
+- A number like "121", "ON121", "ON 121", "ORD-121", "ORD-0121" → "ORD-0121"
+- Pad the numeric part to at least 4 digits with leading zeros.
+- Return ONLY a valid JSON array of strings, e.g. ["ORD-0121","ORD-0122"]
+- No markdown, no explanation, nothing else.
+""".strip()
+
+
+def _normalise_order_numbers(raw_text: str) -> list[str]:
+    """Send raw text to Groq; returns list of normalised ORD-XXXX strings."""
+    client = Groq(api_key=GROQ_API_KEY)
+    resp = client.chat.completions.create(
+        model=GROQ_MODEL,
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user",   "content": raw_text},
+        ],
+        temperature=0,
+        max_tokens=512,
+    )
+    reply = (resp.choices[0].message.content or "").strip()
+
+    # Strip markdown fences if present
+    reply = re.sub(r"```(?:json)?", "", reply).strip()
+
+    # Find JSON array
+    match = re.search(r"\[.*\]", reply, re.DOTALL)
+    if not match:
+        print(RED(f"  ✗ Groq returned unexpected output: {reply[:200]}"))
+        return []
+
+    try:
+        numbers = json.loads(match.group())
+    except json.JSONDecodeError as e:
+        print(RED(f"  ✗ JSON parse error: {e}"))
+        return []
+
+    # Deduplicate preserving order
+    seen: set[str] = set()
+    result: list[str] = []
+    for n in numbers:
+        n = str(n).strip().upper()
+        if n and n not in seen:
+            seen.add(n)
+            result.append(n)
+
+    return result
+
+
+# ── ERP single-order lookup ───────────────────────────────────────────────────
+
+def _lookup_order(order_number: str, token: str) -> dict | None:
+    """
+    GET /admin/orders?search=<order_number> and return the matching order dict,
+    or None if not found.
+    """
+    import config as _cfg
+    tid = _cfg.ERP_TENANT_IDS[0] if _cfg.ERP_TENANT_IDS else 1
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+    try:
+        resp = erp._SESSION.get(
+            f"{_cfg.ERP_BASE_URL}/admin/orders",
+            headers=headers,
+            params={"search": order_number, "per_page": 20},
+            timeout=20,
+        )
+    except Exception as exc:
+        print(RED(f"  ✗ Network error looking up {order_number}: {exc}"))
+        return None
+
+    if resp.status_code != 200:
+        print(RED(f"  ✗ ERP returned {resp.status_code} for {order_number}"))
+        return None
+
+    def _norm(n: str | None) -> str:
+        digits = re.sub(r"\D", "", str(n or ""))
+        return digits.lstrip("0") or "0"
+
+    target = _norm(order_number)
+    for o in resp.json().get("data", []):
+        if _norm(o.get("order_number", "")) == target:
+            return o
+
     return None
 
 
-def _in_range(order: dict, from_dt: date, to_dt: date) -> bool:
-    """Check if order's created_at date falls within the range."""
-    raw = order.get("created_at") or ""
-    # ERP returns ISO format: "2026-06-15T21:33:36.000000Z"
-    try:
-        d = datetime.strptime(raw[:10], "%Y-%m-%d").date()
-        return from_dt <= d <= to_dt
-    except ValueError:
-        return False
-
+# ── Main entry point ──────────────────────────────────────────────────────────
 
 def run_bulk_complete() -> None:
-    """
-    Interactive Mode 3 flow:
-    1. Prompt date range.
-    2. Fetch all ERP orders (paginated GET).
-    3. Filter to those in range and NOT yet completed.
-    4. Show table and prompt confirmation.
-    5. PATCH one by one, sequentially.
-    6. Print tally.
-    """
     print(BOLD("\n═══ Bulk Mark Orders Completed ══════════════════════"))
     print(YELLOW(f"  Company : {config.ACTIVE_COMPANY_LABEL}"))
-    print(YELLOW(f"  ERP URL : {config.ERP_BASE_URL}"))
-    print()
+    print(YELLOW(f"  ERP URL : {config.ERP_BASE_URL}\n"))
 
-    # ── Date range input ─────────────────────────────────────────────────────
-    print("  Enter the date range for orders to check.")
-    print("  Format: YYYY-MM-DD  (e.g. 2026-06-01)\n")
+    # ── 1. Read raw order numbers ─────────────────────────────────────────────
+    print(YELLOW("Paste order numbers below (any format). Press Enter twice when done:"))
+    lines: list[str] = []
+    try:
+        while True:
+            line = input()
+            if line == "" and lines and lines[-1] == "":
+                break
+            lines.append(line)
+    except EOFError:
+        pass
+    raw_text = "\n".join(lines).strip()
 
-    while True:
-        raw_from = input("  From date: ").strip()
-        from_dt = _parse_date(raw_from)
-        if from_dt:
-            break
-        print(RED("  Invalid date. Try YYYY-MM-DD."))
-
-    while True:
-        raw_to = input("  To date  : ").strip()
-        to_dt = _parse_date(raw_to)
-        if to_dt:
-            break
-        print(RED("  Invalid date. Try YYYY-MM-DD."))
-
-    if from_dt > to_dt:
-        print(RED("  ✗ 'From' date is after 'To' date. Exiting."))
+    if not raw_text:
+        print(RED("  No input provided. Exiting."))
         return
 
-    # ── Fetch all orders from ERP ────────────────────────────────────────────
-    print(YELLOW(f"\n  ⏳ Fetching orders from ERP ({config.ERP_BASE_URL})..."))
+    # ── 2. Normalise via Groq ─────────────────────────────────────────────────
+    print(YELLOW("\n  ⏳ Sending to Groq for order number normalisation..."))
+    normalised = _normalise_order_numbers(raw_text)
+
+    if not normalised:
+        print(RED("  ✗ No valid order numbers found."))
+        return
+
+    print(GREEN(f"  ✓ {len(normalised)} unique order number(s) extracted: {', '.join(normalised)}"))
+
+    # ── 3. ERP lookup for each order ─────────────────────────────────────────
+    print(YELLOW(f"\n  ⏳ Fetching {len(normalised)} order(s) from ERP..."))
     token = erp.get_token()
-    all_orders = erp.fetch_all_orders(token)
 
-    if not all_orders:
-        print(RED("  ✗ No orders returned from ERP. Check connection."))
+    found:   list[dict] = []   # (order dict from ERP)
+    missing: list[str]  = []   # order numbers not found in ERP
+
+    for onum in normalised:
+        order = _lookup_order(onum, token)
+        if order:
+            order["_input_number"] = onum   # keep the normalised number handy
+            found.append(order)
+        else:
+            missing.append(onum)
+            print(YELLOW(f"  ⚠  {onum}  not found in ERP"))
+
+    if not found:
+        print(RED("  ✗ None of the orders were found in ERP. Exiting."))
         return
 
-    print(GREEN(f"  ✓ Fetched {len(all_orders)} total order(s) from ERP."))
+    # ── 4. Split: already completed vs pending ────────────────────────────────
+    already_completed = [o for o in found if str(o.get("status") or "").lower() == "completed"]
+    pending           = [o for o in found if str(o.get("status") or "").lower() != "completed"]
 
-    # ── Filter: in date range and NOT yet completed ──────────────────────────
-    in_range = [o for o in all_orders if _in_range(o, from_dt, to_dt)]
-    pending  = [o for o in in_range  if str(o.get("status") or "").lower() != "completed"]
-    done_cnt = len(in_range) - len(pending)
-
-    print(f"  Orders in range ({raw_from} → {raw_to}): {len(in_range)}")
-    print(f"  Already completed (will be skipped)  : {done_cnt}")
-    print(f"  Pending (not yet completed)           : {len(pending)}")
-
-    if not pending:
-        print(GREEN("\n  ✓ All orders in this range are already completed. Nothing to do."))
-        return
-
-    # ── Show table ───────────────────────────────────────────────────────────
+    # ── 5. Show summary table ─────────────────────────────────────────────────
     print()
     rows = []
-    for o in pending:
-        created = (o.get("created_at") or "")[:10]
+    for o in already_completed:
         rows.append([
             o.get("order_number", "?"),
             o.get("id", "?"),
-            o.get("status", "?"),
+            CYAN("completed"),
             o.get("customer_name", "?"),
-            o.get("total_price", "?"),
-            created,
+            f"${float(o.get('total_price') or 0):,.2f}",
+            "✓ SKIP",
         ])
+    for o in pending:
+        rows.append([
+            o.get("order_number", "?"),
+            o.get("id", "?"),
+            YELLOW(str(o.get("status", "?"))),
+            o.get("customer_name", "?"),
+            f"${float(o.get('total_price') or 0):,.2f}",
+            GREEN("→ MARK"),
+        ])
+    for onum in missing:
+        rows.append([onum, "—", RED("NOT FOUND"), "—", "—", RED("SKIP")])
 
     print(tabulate(
         rows,
-        headers=["Order #", "ERP ID", "Status", "Customer", "Price", "Created"],
+        headers=["Order #", "ERP ID", "Current Status", "Customer", "Price", "Action"],
         tablefmt="rounded_outline",
     ))
     print()
 
-    # ── Confirmation ─────────────────────────────────────────────────────────
+    if not pending:
+        print(GREEN("  ✓ All orders are already completed — nothing to update."))
+        return
+
+    # ── 6. Confirmation ───────────────────────────────────────────────────────
     print(BOLD("─" * 55))
     print(YELLOW(f"  ⚠️  {len(pending)} order(s) will be marked COMPLETED in the ERP."))
-    print(YELLOW( "  This action is IRREVERSIBLE via this script."))
+    if already_completed:
+        print(YELLOW(f"  {len(already_completed)} already completed (skipped)."))
+    if missing:
+        print(YELLOW(f"  {len(missing)} not found in ERP (skipped)."))
     print(BOLD("─" * 55))
     ans = input(f"\n  Type  yes  to proceed, or press Enter to abort: ").strip().lower()
 
@@ -146,35 +239,37 @@ def run_bulk_complete() -> None:
         print(YELLOW("  Aborted — no changes made."))
         return
 
-    # ── PATCH one by one ─────────────────────────────────────────────────────
+    # ── 7. PATCH one by one ───────────────────────────────────────────────────
     print()
     ok   = 0
     fail = 0
 
     for o in pending:
-        erp_id   = o.get("id")
-        order_num = o.get("order_number", "?")
+        erp_id    = o.get("id")
+        order_num = o.get("order_number", o.get("_input_number", "?"))
 
         if not isinstance(erp_id, int) or erp_id <= 0:
-            print(RED(f"  ✗ {order_num}  skipped — missing or invalid ERP id"))
+            print(RED(f"  ✗ {order_num}  skipped — invalid ERP id ({erp_id!r})"))
             fail += 1
             continue
 
         success = erp.mark_order_completed(erp_id, order_num, token)
         if success:
-            print(GREEN(f"  ✓ {order_num:12s}  completed  (id={erp_id})"))
+            print(GREEN(f"  ✓ {order_num:12s}  marked completed  (id={erp_id})"))
             ok += 1
         else:
-            print(RED(f"  ✗ {order_num:12s}  FAILED     (id={erp_id}) — check erp_updates.log"))
+            print(RED(f"  ✗ {order_num:12s}  FAILED            (id={erp_id}) — see erp_updates.log"))
             fail += 1
 
-    # ── Tally ─────────────────────────────────────────────────────────────────
+    # ── 8. Final tally ────────────────────────────────────────────────────────
     print()
     print(BOLD("─── Bulk Complete Summary ──────────────────────────"))
-    print(GREEN(f"  ✓ Marked completed : {ok}"))
+    print(GREEN(f"  ✓ Marked completed   : {ok}"))
     if fail:
-        print(RED(f"  ✗ Failed           : {fail}"))
-    if done_cnt:
-        print(YELLOW(f"  ↷ Already done     : {done_cnt} (skipped)"))
+        print(RED(f"  ✗ Failed             : {fail}"))
+    if already_completed:
+        print(CYAN(f"  ↷ Already completed  : {len(already_completed)} (skipped)"))
+    if missing:
+        print(YELLOW(f"  ? Not found in ERP   : {len(missing)} (skipped)"))
     print(BOLD("───────────────────────────────────────────────────"))
     print(YELLOW("  All PATCH attempts logged to erp_updates.log\n"))
