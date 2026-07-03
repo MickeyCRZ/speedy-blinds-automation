@@ -34,6 +34,21 @@ _SESSION = requests.Session()
 _SESSION.verify = False   # ERP SSL cert is expired — disable verification
 _SESSION.headers.update({"Accept": "application/json", "Content-Type": "application/json"})
 
+# Audit log for every PATCH request (append-only, never overwritten)
+_PATCH_LOG_PATH = Path(__file__).parent.parent / "erp_updates.log"
+
+
+def _log_patch(order_number: str, erp_id, http_status, detail: str) -> None:
+    """Append one line to the audit log for every PATCH attempt."""
+    ts  = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    co  = getattr(config, "ACTIVE_COMPANY_LABEL", "?")
+    line = f"{ts} | PATCH | {co} | {order_number} | id={erp_id} | HTTP {http_status} | {detail}\n"
+    try:
+        with open(_PATCH_LOG_PATH, "a", encoding="utf-8") as fh:
+            fh.write(line)
+    except OSError:
+        pass  # log failure must never crash the main flow
+
 
 # ---------------------------------------------------------------------------
 # Token management
@@ -237,18 +252,20 @@ def _search_order_in_tenant(
     for order in orders:
         erp_num = str(order.get("order_number", "")).strip()
         if _norm(erp_num) == target:
-            price = order.get("total_price")
-            if price is not None:
-                return float(price)
+            price  = order.get("total_price")
+            erp_id = order.get("id")
+            status = str(order.get("status") or "")
+            if price is not None and erp_id is not None:
+                return float(price), int(erp_id), status
 
     return None
 
 
-def fetch_price(order_number: str, token: str) -> Optional[float]:
+def fetch_price(order_number: str, token: str) -> Optional[tuple[float, int, str]]:
     """
-    Look up the total_price for `order_number` across all configured tenants
-    for the active company in parallel. Returns the first non-None price found,
-    or None if not found in any tenant.
+    Look up (total_price, erp_id, status) for `order_number` across all
+    configured tenants for the active company in parallel.
+    Returns the first non-None tuple found, or None if not found.
     """
     import config
     tenant_ids = config.ERP_TENANT_IDS
@@ -326,7 +343,15 @@ def enrich_orders(orders: list[dict]) -> list[dict]:
         prices, _ = _run_lookups(token)
 
     for order in erp_orders:
-        order["price"] = prices.get(id(order))
+        result = prices.get(id(order))
+        if result is not None:
+            order["price"]      = result[0]
+            order["erp_id"]     = result[1]
+            order["erp_status"] = result[2]
+        else:
+            order["price"]      = None
+            order["erp_id"]     = None
+            order["erp_status"] = None
 
     found = sum(1 for o in erp_orders if o.get("price") is not None)
     missing = len(erp_orders) - found
@@ -336,3 +361,108 @@ def enrich_orders(orders: list[dict]) -> list[dict]:
         print(f"  ✓ Prices resolved: {found} found, {missing} not found in ERP")
 
     return orders
+
+
+# ---------------------------------------------------------------------------
+# ERP status update (PATCH)
+# ---------------------------------------------------------------------------
+
+def mark_order_completed(
+    erp_id: int,
+    order_number: str,
+    token: str,
+    tenant_id: int | None = None,
+) -> bool:
+    """
+    PATCH /admin/orders/{erp_id} → {"status": "completed"}.
+
+    Safeguards:
+    - Validates erp_id is a positive integer — refuses if not.
+    - Never runs in parallel (caller's responsibility).
+    - Logs every attempt to erp_updates.log regardless of outcome.
+    - Never raises — returns False on any failure.
+    """
+    import config as _cfg
+    if not isinstance(erp_id, int) or erp_id <= 0:
+        _log_patch(order_number, erp_id, "REFUSED", "invalid erp_id — must be positive int")
+        return False
+
+    tid = tenant_id or (_cfg.ERP_TENANT_IDS[0] if _cfg.ERP_TENANT_IDS else 1)
+    url = f"{_cfg.ERP_BASE_URL}/admin/orders/{erp_id}"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+    payload = {"status": "completed"}
+
+    try:
+        resp = _SESSION.patch(url, json=payload, headers=headers, timeout=15)
+    except Exception as exc:
+        _log_patch(order_number, erp_id, "ERROR", str(exc)[:200])
+        return False
+
+    try:
+        body = resp.json()
+        new_status = body.get("data", {}).get("status", "?")
+        success    = bool(body.get("success"))
+    except Exception:
+        new_status = "?"
+        success    = resp.status_code in (200, 204)
+
+    _log_patch(order_number, erp_id, resp.status_code, f"status→{new_status}")
+    return success and resp.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Bulk order fetch (for Mode 3 bulk-complete)
+# ---------------------------------------------------------------------------
+
+def fetch_all_orders(token: str, page_size: int = 100) -> list[dict]:
+    """
+    GET-paginate through ALL orders for the active company's first tenant.
+    Returns a flat list of raw order dicts from the ERP.
+    Never raises — returns whatever it managed to fetch.
+    """
+    import config as _cfg
+    if not _cfg.ERP_TENANT_IDS:
+        return []
+
+    tid     = _cfg.ERP_TENANT_IDS[0]
+    url     = f"{_cfg.ERP_BASE_URL}/admin/orders"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+
+    all_orders: list[dict] = []
+    page = 1
+    while True:
+        params = {"per_page": page_size, "page": page}
+        try:
+            resp = _SESSION.get(url, headers=headers, params=params, timeout=30)
+        except Exception as exc:
+            print(f"  ⚠️  ERP pagination error (page {page}): {exc}")
+            break
+
+        if resp.status_code != 200:
+            print(f"  ⚠️  ERP returned {resp.status_code} on page {page}")
+            break
+
+        body = resp.json()
+        # Laravel pagination wraps data in {"data": [...], "meta": {...}}
+        data = body.get("data", [])
+        if not isinstance(data, list):
+            break
+        if not data:
+            break
+
+        all_orders.extend(data)
+
+        # Check if there are more pages
+        meta      = body.get("meta", {})
+        last_page = meta.get("last_page", 1)
+        if page >= last_page:
+            break
+        page += 1
+
+    return all_orders

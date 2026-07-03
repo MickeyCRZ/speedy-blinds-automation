@@ -48,18 +48,21 @@ def banner(company_label: str = ""):
 
 
 def choose_mode() -> str:
-    """Prompt the user to select a mode. Returns 'orders' or 'mir'."""
+    """Prompt the user to select a mode. Returns 'orders', 'mir', or 'bulk'."""
     print(BOLD("What would you like to do?"))
     print("  [1] Process WhatsApp Orders")
     print("  [2] MIR Calculate")
+    print("  [3] Bulk Mark Orders Completed")
     print()
     while True:
-        raw = input("Enter number or mode (orders/mir): ").strip().lower()
+        raw = input("Enter number or mode (orders/mir/bulk): ").strip().lower()
         if raw in ("1", "orders", "order", "whatsapp"):
             return "orders"
         if raw in ("2", "mir", "mir calculate", "calculate"):
             return "mir"
-        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1 or 2."))
+        if raw in ("3", "bulk", "bulk complete", "complete"):
+            return "bulk"
+        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1, 2, or 3."))
 
 
 def choose_company() -> str:
@@ -185,6 +188,64 @@ def confirm_orders(orders: list[dict]) -> list[dict]:
     return approved
 
 
+def _prompt_mark_completed(written_orders: list[dict]) -> None:
+    """
+    After sheet writes, offer to mark successfully written (non-rework) orders
+    as 'completed' in the ERP. Fully opt-in — user must type 'yes'.
+    Already-completed orders are skipped silently.
+    """
+    # Only regular orders that have an ERP id and are not already completed
+    candidates = [
+        o for o in written_orders
+        if o.get("type") != "rework"
+        and o.get("erp_id") is not None
+        and str(o.get("erp_status") or "").lower() != "completed"
+    ]
+    already_done = [
+        o for o in written_orders
+        if o.get("type") != "rework"
+        and str(o.get("erp_status") or "").lower() == "completed"
+    ]
+    reworks = [o for o in written_orders if o.get("type") == "rework"]
+
+    if not candidates:
+        if already_done:
+            print(GREEN("  ✓ All orders already marked completed in ERP — nothing to update."))
+        return
+
+    print()
+    print(BOLD("─── Mark Orders Completed in ERP ─────────────────"))
+    print(YELLOW(f"  {len(candidates)} order(s) can be marked completed:"))
+    for o in candidates:
+        print(f"    • {o.get('order_number','?'):12s}  [{o.get('dealer','?')}]")
+    if already_done:
+        print(YELLOW(f"  {len(already_done)} already completed (will be skipped)."))
+    if reworks:
+        print(YELLOW(f"  {len(reworks)} rework(s) skipped (not in ERP)."))
+    print(BOLD("───────────────────────────────────────────────────"))
+    ans = input("  Type  yes  to update ERP, or press Enter to skip: ").strip().lower()
+    if ans != "yes":
+        print(YELLOW("  Skipped — ERP status unchanged."))
+        return
+
+    token = erp.get_token()
+    ok = 0
+    fail = 0
+    for o in candidates:
+        eid = o["erp_id"]
+        onum = o.get("order_number", "?")
+        success = erp.mark_order_completed(eid, onum, token)
+        if success:
+            print(GREEN(f"  ✓ {onum}  marked completed (id={eid})"))
+            ok += 1
+        else:
+            print(RED(f"  ✗ {onum}  failed — check erp_updates.log"))
+            fail += 1
+
+    print(BOLD(f"  ERP updates: {ok} completed, {fail} failed."))
+    print()
+
+
 def _run_order_mode(args) -> None:
     """Run the existing WhatsApp order processing workflow."""
     # ── Company selection ─────────────────────────────────────────────────────
@@ -291,7 +352,11 @@ def _run_order_mode(args) -> None:
     if unmatched:
         report.save_unmatched(unmatched)
 
-    # 5. Summary
+    # 5.5 Opt-in ERP status update
+    if report.written:
+        _prompt_mark_completed(report.written)
+
+    # 6. Summary
     print()
     print(BOLD("─── Summary ───────────────────────────────"))
     print(GREEN(f"  ✓ Written          : {len(report.written)}"))
@@ -344,6 +409,14 @@ def main():
         print(GREEN(f"\n✓ Company set to: {company_label}"))
         print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
         mir.run_mir(dry_run=args.dry_run)
+    elif mode == "bulk":
+        import bulk_complete
+        company_key = choose_company()
+        config.set_company(company_key)
+        company_label = config.COMPANY[company_key]["label"]
+        print(GREEN(f"\n✓ Company set to: {company_label}"))
+        print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
+        bulk_complete.run_bulk_complete()
     else:
         _run_order_mode(args)
 
