@@ -240,6 +240,8 @@ def run_bulk_complete() -> None:
         return
 
     # ── 7. PATCH one by one ───────────────────────────────────────────────────
+    # Refresh token — user may have taken time reading the table
+    token = erp.get_token()
     print()
     ok   = 0
     fail = 0

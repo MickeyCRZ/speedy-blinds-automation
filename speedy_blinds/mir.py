@@ -147,7 +147,7 @@ def fetch_order_details(order_number: str, token: str) -> Optional[dict]:
                 blind_count = 0
                 for line in (lines if isinstance(lines, list) else []):
                     # 'quantity' is the confirmed ERP field name
-                    qty = int(line.get("quantity") or 1)
+                    qty = int(line.get("quantity") or 0)
 
                     # Split option lives inside the 'attributes' list.
                     # Confirmed ERP structure: {'field_key': 'split_option', 'field_label': 'Split Option', 'value': 'no', 'label': 'No'}

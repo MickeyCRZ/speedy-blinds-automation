@@ -143,17 +143,21 @@ def parse_orders(raw_text: str) -> list[dict]:
         order["type"] = "rework" if is_rework else "order"
 
         order["dealer"] = _resolve_dealer(order.get("dealer"))
-        if order["dealer"] not in config.DEALER_SHEETS and config.ACTIVE_COMPANY_LABEL == "Inspira Blinds":
+        # Only apply Inspira fallback for regular orders, not reworks
+        if (
+            not is_rework
+            and order["dealer"] not in config.DEALER_SHEETS
+            and config.ACTIVE_COMPANY_LABEL == "Inspira Blinds"
+        ):
             order["original_dealer"] = order["dealer"] or "Unknown"
             order["dealer"] = "Harvinder"
             order["unknown_dealer_fallback"] = True
 
         o_num = str(order.get("order_number") or "").strip()
         if is_rework:
-            # Keep RW prefix as-is — do NOT normalise to ORD-
-            if o_num and not o_num.upper().startswith("RW"):
-                digits = re.sub(r"\D", "", o_num)
-                order["order_number"] = f"RW{digits}" if digits else o_num
+            # Keep RW prefix — normalise to compact form (strip spaces, keep digits)
+            rw_digits = re.sub(r"\D", "", o_num)
+            order["order_number"] = f"RW{rw_digits}" if rw_digits else o_num
             # Rework price comes from the text — always positive (hyphens are separators)
             raw_amt = order.get("amount")
             if raw_amt is not None:

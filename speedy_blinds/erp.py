@@ -206,10 +206,10 @@ def _search_order_in_tenant(
     order_number: str,
     token: str,
     tenant_id: int,
-) -> Optional[float]:
+) -> Optional[tuple[float, int, str]]:
     """
     Search for `order_number` within a single tenant scope.
-    Returns total_price (float) if found, else None.
+    Returns (total_price, erp_id, status) if found, else None.
     """
     import config
     headers = {

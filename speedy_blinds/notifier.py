@@ -274,8 +274,8 @@ class RunReport:
         written_html = ""
         if self.written:
             items = "".join(
-                f'<li style="padding:2px 0;">✓ <strong>[{w["dealer"]}]</strong> '
-                f'{w["order_number"]} → {w.get("range","")}</li>'
+                f'<li style="padding:2px 0;">✓ <strong>[{w.get("dealer","?")}</strong>] '
+                f'{w.get("order_number","?")} → {w.get("range","")}</li>'
                 for w in self.written
             )
             written_html = f'<h3 style="color:#43a047;">Written</h3><ul>{items}</ul>'
@@ -381,35 +381,47 @@ class RunReport:
             except ValueError:
                 pretty_date = date_key
 
-            day_qty     = 0
-            day_revenue = Decimal(0)
+            day_qty            = 0
+            day_revenue        = Decimal(0)
+            day_rework_revenue = Decimal(0)
             day_acc: dict[str, int] = {}   # accessory totals
             order_rows: list[str] = []
 
             for o in day_orders:
-                # Shorten order number: ORD-0188 → 0188, ON9265 → ON9265
+                is_rework = str(o.get("type") or "").lower() == "rework"
+                # Shorten order number: ORD-0188 → 0188, RW133 → RW133
                 raw_on   = (o.get("order_number") or "?").strip()
                 short_on = raw_on.split("-")[-1] if "-" in raw_on else raw_on
 
                 dealer   = o.get("dealer", "?")
-                customer = o.get("customer_name", "?")
+                customer = o.get("customer_name") or ("—" if is_rework else "?")
                 qty      = int(o.get("qty") or 0)
                 amt      = _to_dec(o.get("price")).quantize(TWO, rounding=ROUND_HALF_UP)
                 acc_str  = self._accessories_str(o)
 
-                order_rows.append(
-                    f'<div style="padding:3px 0;font-size:13px;">'
-                    f'<span style="opacity:0.72;">{short_on}</span>'
-                    f' <span style="opacity:0.5;">|</span> '
-                    f'<strong>{dealer}</strong>'
-                    f' <span style="opacity:0.5;">|</span> '
-                    f'{customer}: {qty}{acc_str}'
-                    f'&nbsp;&nbsp;<span style="opacity:0.82;">Revenue: ${amt:,}</span>'
-                    f'</div>'
-                )
-
-                day_qty     += qty
-                day_revenue += amt
+                if is_rework:
+                    order_rows.append(
+                        f'<div style="padding:3px 0;font-size:13px;opacity:0.8;">'
+                        f'<span style="opacity:0.72;">{short_on}</span>'
+                        f' <span style="opacity:0.5;">|</span> '
+                        f'<strong>{dealer}</strong>'
+                        f'&nbsp;&nbsp;<span style="opacity:0.72;">[RW] ${amt:,}</span>'
+                        f'</div>'
+                    )
+                    day_rework_revenue += amt
+                else:
+                    order_rows.append(
+                        f'<div style="padding:3px 0;font-size:13px;">'
+                        f'<span style="opacity:0.72;">{short_on}</span>'
+                        f' <span style="opacity:0.5;">|</span> '
+                        f'<strong>{dealer}</strong>'
+                        f' <span style="opacity:0.5;">|</span> '
+                        f'{customer}: {qty}{acc_str}'
+                        f'&nbsp;&nbsp;<span style="opacity:0.82;">Revenue: ${amt:,}</span>'
+                        f'</div>'
+                    )
+                    day_qty     += qty
+                    day_revenue += amt
 
                 for key in ("motors", "remotes", "solars", "chargers"):
                     v = o.get(key)
@@ -430,6 +442,10 @@ class RunReport:
             acc_footer = f" ({', '.join(acc_parts)})" if acc_parts else ""
 
             rows_html = "\n".join(order_rows)
+            rework_footer = (
+                f'<br><span style="opacity:0.7;font-size:12px;">'
+                f'Rework charges: ${day_rework_revenue:,}</span>'
+            ) if day_rework_revenue else ""
             cards.append(
                 f'<div style="background:#1b5e3b;border-radius:14px;'
                 f'padding:16px 18px;margin:10px 0;color:#fff;">'
@@ -443,6 +459,7 @@ class RunReport:
                 f'margin-top:14px;padding-top:12px;font-size:13px;line-height:1.9;">'
                 f'<strong>Total Blinds: {day_qty}{acc_footer}</strong><br>'
                 f'<strong>Daily Revenue: ${day_revenue:,}</strong>'
+                f'{rework_footer}'
                 f'</div></div>'
             )
 
