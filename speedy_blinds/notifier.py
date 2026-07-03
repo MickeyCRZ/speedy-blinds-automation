@@ -134,9 +134,24 @@ class RunReport:
             print("  ⚠️  Email notification skipped — NOTIFY_EMAIL_* not set in .env")
             return
 
-        today = self.started_at.strftime("%Y-%m-%d")
+        # Use the order date(s) from written orders, not the run date
+        order_dates = sorted({o.get("date") for o in self.written if o.get("date")})
+        if order_dates:
+            try:
+                if len(order_dates) == 1:
+                    d = datetime.strptime(order_dates[0], "%Y-%m-%d")
+                    date_str = d.strftime("%B %-d, %Y")
+                else:
+                    d1 = datetime.strptime(order_dates[0],  "%Y-%m-%d")
+                    d2 = datetime.strptime(order_dates[-1], "%Y-%m-%d")
+                    date_str = f"{d1.strftime('%B %-d')}–{d2.strftime('%-d, %Y')}"
+            except ValueError:
+                date_str = order_dates[0]
+        else:
+            date_str = self.started_at.strftime("%Y-%m-%d")
+
         subject = (
-            f"[{config.ACTIVE_COMPANY_LABEL}] {today} — "
+            f"[{config.ACTIVE_COMPANY_LABEL}] {date_str} — "
             f"{len(self.written)} written"
             + (" ⚠ Issues" if self.has_issues else " ✓ All good")
         )
