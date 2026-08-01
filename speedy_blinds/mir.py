@@ -709,7 +709,11 @@ def calculate_dual_ledger(
     order_to_installers: dict[str, list[str]] = {}
 
     for batch in batches:
-        installer = batch["installer"]
+        # Normalize installer name through aliases so 'Michael' and 'Mike' merge
+        installer = (
+            config.DEALER_ALIASES.get(batch["installer"].strip().lower())
+            or batch["installer"]
+        )
         if installer not in installer_ledger:
             installer_ledger[installer] = {"total_pay": 0.0, "orders": []}
 
@@ -796,7 +800,7 @@ def calculate_dual_ledger(
             installer_ledger[installer]["total_pay"] += installer_pay
             installer_ledger[installer]["orders"].append({
                 "order_number":  order_num,
-                "dealer":        dealer_name,
+                "dealer":        fuzzy_dealer,
                 "installs":      installs,
                 "uninstalls":    uninstalls,
                 "reworks":       reworks,
@@ -805,11 +809,14 @@ def calculate_dual_ledger(
                 "dealer_charge": dealer_charge,
             })
 
-            # Dealer ledger entry
-            if dealer_name not in dealer_ledger:
-                dealer_ledger[dealer_name] = {"total_charge": 0.0, "orders": []}
-            dealer_ledger[dealer_name]["total_charge"] += dealer_charge
-            dealer_ledger[dealer_name]["orders"].append({
+            # Dealer ledger entry — use fuzzy_dealer as key so aliases merge
+            if fuzzy_dealer not in dealer_ledger:
+                dealer_ledger[fuzzy_dealer] = {
+                    "total_charge": 0.0,
+                    "orders":       [],   # chargeable orders
+                    "self_orders":  [],   # self-installs — shown separately, excluded from total
+                }
+            entry = {
                 "order_number": order_num,
                 "installer":    installer,
                 "installs":     installs,
@@ -817,7 +824,12 @@ def calculate_dual_ledger(
                 "reworks":      reworks,
                 "big_ladder":   big_ladder,
                 "charge":       dealer_charge,
-            })
+            }
+            if is_self_install:
+                dealer_ledger[fuzzy_dealer]["self_orders"].append(entry)
+            else:
+                dealer_ledger[fuzzy_dealer]["total_charge"] += dealer_charge
+                dealer_ledger[fuzzy_dealer]["orders"].append(entry)
 
     # Warn about orders appearing in multiple installer batches
     duplicates = {k: v for k, v in order_to_installers.items() if len(v) > 1}
@@ -902,6 +914,32 @@ def display_dual_summary(
             tablefmt="rounded_outline",
             colalign=("left", "left", "center", "center", "center", "left", "right")
         ))
+
+        # Self-install orders — shown separately, not included in total
+        self_orders = data.get("self_orders", [])
+        if self_orders:
+            self_rows = []
+            for o in self_orders:
+                ladder_str = "🔺 +$25" if o["big_ladder"] else "—"
+                self_rows.append([
+                    o["order_number"],
+                    o["installer"],
+                    str(o["installs"]) if o["installs"] else "—",
+                    str(o["uninstalls"]) if o["uninstalls"] else "—",
+                    str(o["reworks"]) if o["reworks"] else "—",
+                    ladder_str,
+                    DIM(f"${o['charge']:.2f} ✕"),
+                ])
+            self_total = sum(o["charge"] for o in self_orders)
+            self_rows.append(["", "", "", "", "", DIM("Self-installs"), DIM(f"${self_total:.2f} (not charged)")])
+            print(DIM("  🔄 Self-installs (excluded from total):"))
+            print(tabulate(
+                self_rows,
+                headers=["Order", "Installer", "Inst", "Uninst", "Rwks", "Big Ladder", "Charge"],
+                tablefmt="rounded_outline",
+                colalign=("left", "left", "center", "center", "center", "left", "right")
+            ))
+
         print()
         grand_total_charge += data["total_charge"]
 
