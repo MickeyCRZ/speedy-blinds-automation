@@ -144,6 +144,16 @@ def parse_orders(raw_text: str) -> list[dict]:
         order["type"] = "rework" if is_rework else "order"
 
         order["dealer"] = _resolve_dealer(order.get("dealer"))
+
+        # Override dealer if customer_name starts with a dealer's name
+        cust_name = str(order.get("customer_name") or "").strip().lower()
+        if cust_name and not is_rework:
+            # Sort aliases by length descending to match multi-word aliases first
+            sorted_aliases = sorted(config.DEALER_ALIASES.items(), key=lambda x: len(x[0]), reverse=True)
+            for alias, canonical in sorted_aliases:
+                if cust_name == alias or cust_name.startswith(alias + " "):
+                    order["dealer"] = canonical
+                    break
         # Only apply Inspira fallback for regular orders, not reworks
         if (
             not is_rework

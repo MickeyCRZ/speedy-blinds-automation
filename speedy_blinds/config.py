@@ -16,7 +16,7 @@ load_dotenv()
 # Groq API (free tier, no billing required)
 # ---------------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL   = "llama-3.3-70b-versatile"   # best free model for structured extraction
+GROQ_MODEL   = "llama-3.1-8b-instant"
 
 # ---------------------------------------------------------------------------
 # Google Sheets
@@ -131,6 +131,7 @@ SPEEDY_DEALER_SHEETS: dict[str, str] = {
     "Akash":     "1fZh-58DzPYMiGvXdPfw2TYPoWPPrsJhJZlqnHH8f3D4",
     "Joseph":    "12f1_iP6O_Rnp9Ze4bKbjF1zBMYeWxJFutvNc1OzZXb0",
     "Nithin":    "1kstbKMPhgnf3vPuZ7EEpL8cJrgaLQdChEu5eJ5AGGNA",
+    "Jeff":      "1o8DwXb-yN_xjLp0L8xIA29swgFE9aYzUuD6gq3BeibU",
 }
 
 # Fuzzy-match aliases (lowercase → canonical dealer name)
@@ -158,6 +159,8 @@ SPEEDY_DEALER_ALIASES: dict[str, str] = {
     "akash":      "Akash",
     "joseph":     "Joseph",
     "nithin":     "Nithin",
+    "jeff":       "Jeff",
+    "jeffrin":    "Jeff",
 }
 
 # ---------------------------------------------------------------------------
@@ -173,6 +176,7 @@ INSPIRA_DEALER_SHEETS: dict[str, str] = {
     "AJ":        "1pM0QWHUHF2DQ0STfjUflOaEz_-pxmA-RRS_kJzUjVlA",
     "Sidhu":     "1qb1y18Z8H3zYLkDCeJ161mxr0EG9Vxhn5MT94jJVOEQ",
     "Navtej":    "1Blk9GJYIIgbCTBUUEJCPIhBJd9ZSuQvTtCQZyQdDfOo",
+    "Jaspreet":  "1meA8yAZtkEWChPOg3gOaJS6kRH9_Wx9dZiLQLJLGwro",
 }
 
 INSPIRA_DEALER_ALIASES: dict[str, str] = {
@@ -191,6 +195,7 @@ INSPIRA_DEALER_ALIASES: dict[str, str] = {
     "aj":           "AJ",
     "sidhu":        "Sidhu",
     "navtej":       "Navtej",
+    "jaspreet":     "Jaspreet",
 }
 
 # Active defaults (overridden by set_company() at runtime)
