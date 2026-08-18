@@ -149,7 +149,7 @@ def inspect(company_key: str) -> None:
 if __name__ == "__main__":
     print("\n🔍 ERP Field Inspector — READ-ONLY (GET requests only)")
     print("=" * 65)
-    inspect("speedy")
-    print()
-    inspect("inspira")
+    for key in config.COMPANY.keys():
+        inspect(key)
+        print()
     print("\n✓ Done.\n")

@@ -76,7 +76,8 @@ def choose_company() -> str:
     print()
 
     while True:
-        raw = input("Enter number or name (speedy/inspira): ").strip().lower()
+        options_str = "/".join(companies)
+        raw = input(f"Enter number or name ({options_str}): ").strip().lower()
 
         # Accept number
         if raw.isdigit():
@@ -93,7 +94,7 @@ def choose_company() -> str:
             if raw in cfg["label"].lower() or raw in key:
                 return key
 
-        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1, 2, 'speedy', or 'inspira'."))
+        print(RED(f"  Unrecognised choice '{raw}'. Please enter a valid number or company name."))
 
 
 def read_input(file_path: str | None) -> str:

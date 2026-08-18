@@ -183,24 +183,45 @@ def write_order(order: dict) -> dict:
     row = _order_to_row(order)
     body = {"values": [row]}
 
-    range_template = _RANGE_TEMPLATE
-    if dealer in ["Phil", "Alen"]:
-        range_template = f"{SHEET_TAB}!A:G"
-
     try:
         service = _get_service()
+        
+        # Find the last populated row based on column B or D
+        read_result = service.spreadsheets().values().get(
+            spreadsheetId=sheet_id,
+            range=f"{SHEET_TAB}!B:D"
+        ).execute()
+        
+        values = read_result.get("values", [])
+        last_row = 0
+        for i, row_data in enumerate(values):
+            b_val = str(row_data[0]).strip() if len(row_data) > 0 else ""
+            d_val = str(row_data[2]).strip() if len(row_data) > 2 else ""
+            if b_val or d_val:
+                last_row = i + 1
+        
+        next_row = max(last_row + 1, 1)
+        
+        if dealer in ["Phil", "Alen"]:
+            target_range = f"{SHEET_TAB}!A{next_row}:G{next_row}"
+        else:
+            target_range = f"{SHEET_TAB}!B{next_row}:G{next_row}"
+
         result = (
             service.spreadsheets()
             .values()
-            .append(
+            .update(
                 spreadsheetId=sheet_id,
-                range=range_template,
-                valueInputOption="USER_ENTERED",   # respects date formatting
-                insertDataOption="INSERT_ROWS",    # never overwrites existing rows
+                range=target_range,
+                valueInputOption="USER_ENTERED",
                 body=body,
             )
             .execute()
         )
+        
+        # Mock the updates dict structure that append() normally returns
+        result["updates"] = {"updatedRange": result.get("updatedRange", target_range)}
+        
         if order.get("unknown_dealer_fallback"):
             updated_range = result.get("updates", {}).get("updatedRange")
             if updated_range:

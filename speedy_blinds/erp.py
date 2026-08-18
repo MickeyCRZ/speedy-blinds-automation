@@ -206,10 +206,10 @@ def _search_order_in_tenant(
     order_number: str,
     token: str,
     tenant_id: int,
-) -> Optional[tuple[float, int, str]]:
+) -> Optional[tuple[float, int, str, str, int]]:
     """
     Search for `order_number` within a single tenant scope.
-    Returns (total_price, erp_id, status) if found, else None.
+    Returns (total_price, erp_id, status, dealer_name, blind_count) if found, else None.
     """
     import config
     headers = {
@@ -255,15 +255,21 @@ def _search_order_in_tenant(
             price  = order.get("total_price")
             erp_id = order.get("id")
             status = str(order.get("status") or "")
+            dealer_obj = order.get("dealer") or {}
+            dealer_name = dealer_obj.get("name", "") if isinstance(dealer_obj, dict) else str(dealer_obj)
+            
+            lines = order.get("lines") or []
+            blind_count = sum(int(line.get("quantity") or 0) for line in lines)
+            
             if price is not None and erp_id is not None:
-                return float(price), int(erp_id), status
+                return float(price), int(erp_id), status, dealer_name, blind_count
 
     return None
 
 
-def fetch_price(order_number: str, token: str) -> Optional[tuple[float, int, str]]:
+def fetch_price(order_number: str, token: str) -> Optional[tuple[float, int, str, str, int]]:
     """
-    Look up (total_price, erp_id, status) for `order_number` across all
+    Look up (total_price, erp_id, status, dealer_name, blind_count) for `order_number` across all
     configured tenants for the active company in parallel.
     Returns the first non-None tuple found, or None if not found.
     """
@@ -348,6 +354,20 @@ def enrich_orders(orders: list[dict]) -> list[dict]:
             order["price"]      = result[0]
             order["erp_id"]     = result[1]
             order["erp_status"] = result[2]
+            
+            erp_dealer = result[3]
+            erp_qty = result[4]
+            
+            current_dealer = str(order.get("dealer") or "").strip().lower()
+            if not current_dealer or current_dealer == "unknown" or current_dealer == "none":
+                if erp_dealer and erp_dealer != "?":
+                    canonical = config.DEALER_ALIASES.get(erp_dealer.lower().strip(), erp_dealer.strip())
+                    order["dealer"] = canonical
+                    
+            current_qty = order.get("qty")
+            if current_qty is None or current_qty == "" or current_qty == 0 or str(current_qty).lower() == "none":
+                if erp_qty > 0:
+                    order["qty"] = erp_qty
         else:
             order["price"]      = None
             order["erp_id"]     = None

@@ -3,3 +3,16 @@ credentials.json
 __pycache__/
 *.pyc
 .DS_Store
+
+# Local outputs
+*.log
+order_dump.json
+speedy_blinds/unmatched_orders.json
+test_out.txt
+
+# Scratch scripts
+fix_*.py
+test_*.py
+run_mock.py
+dump_order.py
+update_tests.py

@@ -112,7 +112,7 @@ def parse_orders(raw_text: str) -> list[dict]:
         model=GROQ_MODEL,
         messages=messages,
         temperature=0,      # deterministic output
-        max_tokens=8192,
+        max_tokens=6500,
     )
     reply = response.choices[0].message.content or ""
 
@@ -132,7 +132,7 @@ def parse_orders(raw_text: str) -> list[dict]:
             model=GROQ_MODEL,
             messages=messages,
             temperature=0,
-            max_tokens=8192,
+            max_tokens=6500,
         )
         reply = response.choices[0].message.content or ""
         orders = _parse_response(reply)

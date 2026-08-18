@@ -16,7 +16,7 @@ load_dotenv()
 # Groq API (free tier, no billing required)
 # ---------------------------------------------------------------------------
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL   = "llama-3.1-8b-instant"
+GROQ_MODEL   = "openai/gpt-oss-120b"
 
 # ---------------------------------------------------------------------------
 # Google Sheets
@@ -39,6 +39,9 @@ SPEEDY_ERP_PASSWORD = os.getenv("ERP_PASSWORD", "")
 INSPIRA_ERP_EMAIL    = os.getenv("INSPIRA_ERP_EMAIL", "")
 INSPIRA_ERP_PASSWORD = os.getenv("INSPIRA_ERP_PASSWORD", "")
 
+HOUSTON_ERP_EMAIL    = os.getenv("HOUSTON_ERP_EMAIL", "")
+HOUSTON_ERP_PASSWORD = os.getenv("HOUSTON_ERP_PASSWORD", "")
+
 ERP_EMAIL    = SPEEDY_ERP_EMAIL
 ERP_PASSWORD = SPEEDY_ERP_PASSWORD
 
@@ -59,6 +62,13 @@ COMPANY: dict[str, dict] = {
         "tenant_ids":        [1],
         "token_key":         "INSPIRA_ERP_TOKEN",
         "token_expires_key": "INSPIRA_ERP_TOKEN_EXPIRES_AT",
+    },
+    "houston": {
+        "label":             "Houston Blinds",
+        "base_url":          "https://api.speedyblinds.cloud/api/v1",
+        "tenant_ids":        [2],
+        "token_key":         "HOUSTON_ERP_TOKEN",
+        "token_expires_key": "HOUSTON_ERP_TOKEN_EXPIRES_AT",
     },
 }
 
@@ -91,6 +101,11 @@ def set_company(key: str) -> None:
         DEALER_ALIASES = INSPIRA_DEALER_ALIASES
         ERP_EMAIL      = INSPIRA_ERP_EMAIL
         ERP_PASSWORD   = INSPIRA_ERP_PASSWORD
+    elif key == "houston":
+        DEALER_SHEETS  = HOUSTON_DEALER_SHEETS
+        DEALER_ALIASES = HOUSTON_DEALER_ALIASES
+        ERP_EMAIL      = HOUSTON_ERP_EMAIL
+        ERP_PASSWORD   = HOUSTON_ERP_PASSWORD
     else:
         DEALER_SHEETS  = SPEEDY_DEALER_SHEETS
         DEALER_ALIASES = SPEEDY_DEALER_ALIASES
@@ -132,6 +147,8 @@ SPEEDY_DEALER_SHEETS: dict[str, str] = {
     "Joseph":    "12f1_iP6O_Rnp9Ze4bKbjF1zBMYeWxJFutvNc1OzZXb0",
     "Nithin":    "1kstbKMPhgnf3vPuZ7EEpL8cJrgaLQdChEu5eJ5AGGNA",
     "Jeff":      "1o8DwXb-yN_xjLp0L8xIA29swgFE9aYzUuD6gq3BeibU",
+    "Karanveer": "1ZNVGZWBxTYxHjQL-nh5bcMfZCni5Xh3dD60fYhHo8X4",
+    "Hammad":    "1pbI7cMEbZL1zX_ddrE0cLpU3KdGdsiHDt21EfXSW3WY",
 }
 
 # Fuzzy-match aliases (lowercase → canonical dealer name)
@@ -164,6 +181,8 @@ SPEEDY_DEALER_ALIASES: dict[str, str] = {
     "nithin":     "Nithin",
     "jeff":       "Jeff",
     "jeffrin":    "Jeff",
+    "karanveer":  "Karanveer",
+    "hammad":     "Hammad",
 }
 
 # ---------------------------------------------------------------------------
@@ -204,3 +223,20 @@ INSPIRA_DEALER_ALIASES: dict[str, str] = {
 # Active defaults (overridden by set_company() at runtime)
 DEALER_SHEETS  = SPEEDY_DEALER_SHEETS
 DEALER_ALIASES = SPEEDY_DEALER_ALIASES
+
+# ---------------------------------------------------------------------------
+# Dealer → Spreadsheet ID (Houston Blinds)
+# ---------------------------------------------------------------------------
+HOUSTON_DEALER_SHEETS: dict[str, str] = {
+    "Rmit":   "1vf8lvNBBFLCeTJlUIwQK5i6Qb0ay9KbyCNGnfRFEiP8",
+    "Mike":   "1rxUmGnhzi26iKpAK5n8TcsvGui6pcHQAGanCtB0K9XQ",
+    "Jubin":  "1JcD6cjxxD7h9JtvrtBQCgU0oVDCq79ispfGRD3FyhsM",
+    "Victor": "1QqRYShFpZFO9kLhNSjc3VtoI9rP-aIZ6l-Fu592YQAs",
+}
+
+HOUSTON_DEALER_ALIASES: dict[str, str] = {
+    "rmit":   "Rmit",
+    "mike":   "Mike",
+    "jubin":  "Jubin",
+    "victor": "Victor",
+}

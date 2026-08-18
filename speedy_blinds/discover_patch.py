@@ -16,12 +16,18 @@ sys.path.insert(0, os.path.dirname(__file__))
 import config
 import erp
 
-# ── Choose company ───────────────────────────────────────────────────────────
+companies = list(config.COMPANY.keys())
 print("\n  Which company?")
-print("  [1] Speedy Blinds")
-print("  [2] Inspira Blinds")
+for i, key in enumerate(companies, 1):
+    print(f"  [{i}] {config.COMPANY[key]['label']}")
 choice = input("  Choice: ").strip()
-config.set_company("inspira" if choice == "2" else "speedy")
+try:
+    idx = int(choice) - 1
+    selected_key = companies[idx] if 0 <= idx < len(companies) else "speedy"
+except ValueError:
+    selected_key = "speedy"
+
+config.set_company(selected_key)
 print(f"\n  Company : {config.ACTIVE_COMPANY_LABEL}")
 print(f"  ERP URL : {config.ERP_BASE_URL}")
 
