@@ -63,7 +63,14 @@ def _get_system_prompt() -> str:
         - Dates must always be YYYY-MM-DD. If only day and month given (e.g. "9 June"), assume year 2026.
         - IMPORTANT: If a date appears as a header or summary line in the message (e.g. "July 2, 2026" or "2 July" or "02/07"), treat it as the date for ALL orders in that message unless a specific order has its own date explicitly attached to it. Never default to today's date — always use the date stated in the message.
         - Dealer name must exactly match one of the allowed values (case-sensitive).
-        - If the dealer name in the message is a known alias/abbreviation (e.g. "vtt" → "VT Thomas"), resolve it.
+        - If the dealer name in the message is a known alias/abbreviation, resolve it to the canonical name. Key examples:
+          • "kamal", "kamalpreet", "kamalpreet singh" → "Komal"
+          • "vtt", "thomas" → "VT Thomas"
+          • "allen" → "Alen"
+          • "michael" → "Mike"
+          • "sneha" → "Mathew"
+          • "jeffrin" → "Jeff"
+          • "philip", "philemon", "chacko" → "Phil"
         - Strip any currency symbols from amount.
         - Do NOT include payment entries, totals, or summary rows — only per-order/per-rework rows.
         - "Total blinds" lines and similar summaries must be ignored.

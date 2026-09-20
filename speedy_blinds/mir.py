@@ -64,7 +64,7 @@ DEALER_BIG_LADDER    = 25.00   # flat per order (on top of blind rate)
 
 # What we pay installers per blind
 INSTALLER_RATE_INSTALL   = 3.00
-INSTALLER_RATE_UNINSTALL = 2.00
+INSTALLER_RATE_UNINSTALL = 3.00
 INSTALLER_RATE_REWORK    = 3.00
 INSTALLER_BIG_LADDER     = 20.00   # flat per order (on top of blind pay)
 
@@ -134,7 +134,8 @@ def parse_order_jobs(raw_text: str) -> list[dict]:
         'set order to empty string "" and reworks to 2.\n\n'
         "Special cases:\n"
         "- If an action count is not mentioned, use null.\n"
-        "- If the same order number is mentioned multiple times, merge them into ONE single JSON object with the TOTAL counts for installs, uninstalls, reworks.\n\n"
+        "- If the same order number is mentioned multiple times, merge them into ONE single JSON object with the TOTAL counts for installs, uninstalls, reworks.\n"
+        "- IF THE TEXT IS JUST A BARE LIST OF ORDER NUMBERS with no other text, you MUST extract EVERY SINGLE order number as a separate JSON object with null counts. Do not skip any!\n\n"
         "Return ONLY a valid JSON array. No markdown fences, no explanation.\n\n"
         "Output format (exactly):\n"
         '[{"order": "<raw order ref or empty>", "installs": <int|null>, "uninstalls": <int|null>, '
@@ -149,22 +150,33 @@ def parse_order_jobs(raw_text: str) -> list[dict]:
                 {"role": "user",   "content": raw_text},
             ],
             temperature=0,
-            max_tokens=1024,
+            max_tokens=6500,
         )
         reply = response.choices[0].message.content or ""
     except Exception as exc:
         print(RED(f"  ✗ Groq API error: {exc}"))
         return []
 
-    # Strip markdown fences if present
-    reply = re.sub(r"```(?:json)?", "", reply).strip()
+    raw_list: list[dict] = []
     match = re.search(r"\[.*\]", reply, re.DOTALL)
-    if not match:
-        return []
+    if match:
+        try:
+            raw_list = json.loads(match.group())
+        except json.JSONDecodeError:
+            pass
 
-    try:
-        raw_list: list[dict] = json.loads(match.group())
-    except json.JSONDecodeError:
+    # Fallback: if full array parse failed (e.g. truncated closing bracket), extract individual JSON objects
+    if not raw_list:
+        for obj_match in re.finditer(r"\{[^{}]+\}", reply):
+            try:
+                obj = json.loads(obj_match.group())
+                if isinstance(obj, dict) and "order" in obj:
+                    raw_list.append(obj)
+            except json.JSONDecodeError:
+                continue
+
+    if not raw_list:
+        print(RED(f"  ✗ Groq API error: LLM did not return a valid JSON array. Response: {reply[:150]}..."))
         return []
 
     # Normalise and validate each entry
@@ -289,6 +301,15 @@ def _print_batch_preview(installer: str, orders: list[dict]) -> None:
         erp_count = (o.get("erp_preview") or {}).get("blind_count")
         txt_installs = o.get("installs_txt")
         over_installs = o.get("installs_override")
+        effective_uninstalls = o.get("uninstalls_override") if o.get("uninstalls_override") is not None else o.get("uninstalls_txt")
+
+        # Flag when text mentioned uninstalls but not installs — installs auto-fetched from ERP
+        uninstall_auto_install = (
+            (effective_uninstalls or 0) > 0
+            and txt_installs is None
+            and over_installs is None
+            and erp_count is not None
+        )
 
         if over_installs is not None:
             installs_str = BOLD(f"{over_installs}") + " ✎"
@@ -300,6 +321,8 @@ def _print_batch_preview(installer: str, orders: list[dict]) -> None:
             installs_str = YELLOW(f"ERP:{erp_count}") + "/" + MAGENTA(f"Txt:{txt_installs}")
         elif txt_installs is not None and erp_count is None:
             installs_str = MAGENTA(f"Txt:{txt_installs}")
+        elif uninstall_auto_install:
+            installs_str = YELLOW(f"⚠ {erp_count}")
         elif erp_count is not None:
             installs_str = str(erp_count)
         else:
@@ -341,6 +364,15 @@ def _print_batch_preview(installer: str, orders: list[dict]) -> None:
         for o in orders
     ):
         print(YELLOW("    ⚠  ERP:N/Txt:M = install count discrepancy — use [E]dit to override."))
+    has_uninstall_auto = any(
+        (o.get("uninstalls_override") if o.get("uninstalls_override") is not None else o.get("uninstalls_txt") or 0) > 0
+        and o.get("installs_txt") is None
+        and o.get("installs_override") is None
+        and (o.get("erp_preview") or {}).get("blind_count") is not None
+        for o in orders
+    )
+    if has_uninstall_auto:
+        print(YELLOW("    ⚠  Yellow Installs = uninstalls in text, installs auto-filled from ERP — use [E]dit if uninstall-only."))
     any_flagged_cust = any(
         _fuzzy_match((o.get("erp_preview") or {}).get("customer_name", ""), list(config.DEALER_ALIASES.values()))
         for o in orders
@@ -735,10 +767,16 @@ def calculate_dual_ledger(
             r_txt = o.get("reworks_txt")
 
             if erp_count is not None:
-                if i_txt or u_txt or r_txt:
+                # If text explicitly mentions uninstalls/removals but does not mention installs,
+                # do NOT set installs to zero — fetch the install count from ERP as fallback!
+                if u_txt and i_txt is None:
+                    i_base = erp_count
+                    u_base = u_txt if isinstance(u_txt, (int, float)) and u_txt > 0 else erp_count
+                    r_base = r_txt if isinstance(r_txt, (int, float)) and r_txt > 0 else (erp_count if r_txt else 0)
+                elif i_txt or u_txt or r_txt:
                     i_base = erp_count if i_txt else 0
-                    u_base = erp_count if u_txt else 0
-                    r_base = erp_count if r_txt else 0
+                    u_base = u_txt if isinstance(u_txt, (int, float)) and u_txt > 0 else (erp_count if u_txt else 0)
+                    r_base = r_txt if isinstance(r_txt, (int, float)) and r_txt > 0 else (erp_count if r_txt else 0)
                 else:
                     i_base = erp_count
                     u_base = 0

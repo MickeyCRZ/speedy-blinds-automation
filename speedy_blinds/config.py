@@ -168,8 +168,11 @@ SPEEDY_DEALER_ALIASES: dict[str, str] = {
     "chacko":         "Phil",
     "han":        "Han",
     "jubin":      "Jubin",
-    "komal":      "Komal",
-    "kamal":      "Komal",
+    "komal":            "Komal",
+    "kamal":            "Komal",
+    "kamalpreet":       "Komal",
+    "kamalpreet singh": "Komal",
+    "kamal preet":      "Komal",
     "aman":       "Aman",
     "tom":        "Tom",
     "shawn":      "Shawn",
@@ -199,6 +202,7 @@ INSPIRA_DEALER_SHEETS: dict[str, str] = {
     "Sidhu":     "1qb1y18Z8H3zYLkDCeJ161mxr0EG9Vxhn5MT94jJVOEQ",
     "Navtej":    "1Blk9GJYIIgbCTBUUEJCPIhBJd9ZSuQvTtCQZyQdDfOo",
     "Jaspreet":  "1meA8yAZtkEWChPOg3gOaJS6kRH9_Wx9dZiLQLJLGwro",
+    "Chirag":    "1svAPPOB8AGd05Q8lVJYr3RGY8OozIKNXFtT7O1_c4jw",
 }
 
 INSPIRA_DEALER_ALIASES: dict[str, str] = {
@@ -218,6 +222,7 @@ INSPIRA_DEALER_ALIASES: dict[str, str] = {
     "sidhu":        "Sidhu",
     "navtej":       "Navtej",
     "jaspreet":     "Jaspreet",
+    "chirag":       "Chirag",
 }
 
 # Active defaults (overridden by set_company() at runtime)

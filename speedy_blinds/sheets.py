@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -31,6 +32,20 @@ SCOPES = [
 _LAST_COLUMN = chr(ord(FIRST_COLUMN) + WRITE_COLUMNS - 1)
 _RANGE_TEMPLATE = f"{SHEET_TAB}!{FIRST_COLUMN}:{_LAST_COLUMN}"
 
+
+def _execute_with_retry(request, max_retries=4):
+    """Execute a Google API request with exponential backoff on 500-level and rate-limit errors."""
+    delay = 2
+    for attempt in range(max_retries):
+        try:
+            return request.execute()
+        except HttpError as e:
+            if e.resp.status in [500, 502, 503, 504, 429] and attempt < max_retries - 1:
+                print(f"  ⚠️  Google API {e.resp.status} error, retrying in {delay}s...")
+                time.sleep(delay)
+                delay *= 2
+            else:
+                raise
 
 def _get_service():
     """Build and return an authenticated Sheets API service."""
@@ -187,10 +202,11 @@ def write_order(order: dict) -> dict:
         service = _get_service()
         
         # Find the last populated row based on column B or D
-        read_result = service.spreadsheets().values().get(
+        req_get = service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
             range=f"{SHEET_TAB}!B:D"
-        ).execute()
+        )
+        read_result = _execute_with_retry(req_get)
         
         values = read_result.get("values", [])
         last_row = 0
@@ -207,7 +223,7 @@ def write_order(order: dict) -> dict:
         else:
             target_range = f"{SHEET_TAB}!B{next_row}:G{next_row}"
 
-        result = (
+        req_update = (
             service.spreadsheets()
             .values()
             .update(
@@ -216,8 +232,8 @@ def write_order(order: dict) -> dict:
                 valueInputOption="USER_ENTERED",
                 body=body,
             )
-            .execute()
         )
+        result = _execute_with_retry(req_update)
         
         # Mock the updates dict structure that append() normally returns
         result["updates"] = {"updatedRange": result.get("updatedRange", target_range)}

@@ -53,16 +53,22 @@ def choose_mode() -> str:
     print("  [1] Process WhatsApp Orders")
     print("  [2] MIR Calculate")
     print("  [3] Bulk Mark Orders Completed")
+    print("  [4] Review Prices")
+    print("  [5] Process Reworks")
     print()
     while True:
-        raw = input("Enter number or mode (orders/mir/bulk): ").strip().lower()
+        raw = input("Enter number or mode (orders/mir/bulk/review/rework): ").strip().lower()
         if raw in ("1", "orders", "order", "whatsapp"):
             return "orders"
         if raw in ("2", "mir", "mir calculate", "calculate"):
             return "mir"
         if raw in ("3", "bulk", "bulk complete", "complete"):
             return "bulk"
-        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1, 2, or 3."))
+        if raw in ("4", "review", "review prices"):
+            return "review"
+        if raw in ("5", "rework", "reworks", "process reworks"):
+            return "rework"
+        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1, 2, 3, 4, or 5."))
 
 
 def choose_company() -> str:
@@ -418,6 +424,22 @@ def main():
         print(GREEN(f"\n✓ Company set to: {company_label}"))
         print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
         bulk_complete.run_bulk_complete()
+    elif mode == "review":
+        import price_reviewer
+        company_key = choose_company()
+        config.set_company(company_key)
+        company_label = config.COMPANY[company_key]["label"]
+        print(GREEN(f"\n✓ Company set to: {company_label}"))
+        print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
+        price_reviewer.verify_and_recalculate()
+    elif mode == "rework":
+        import rework_processor
+        company_key = choose_company()
+        config.set_company(company_key)
+        company_label = config.COMPANY[company_key]["label"]
+        print(GREEN(f"\n✓ Company set to: {company_label}"))
+        print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
+        rework_processor.process_reworks()
     else:
         _run_order_mode(args)
 

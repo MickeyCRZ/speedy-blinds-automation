@@ -175,6 +175,30 @@ check("Han dealer charge — Self Install = $0",
     f"got ${dl_d['Han']['total_charge']:.2f}")
 
 
+# Test Case D2 — Uninstalls in text without installs mentioned → auto-fetches installs from ERP
+batches_d2 = [
+    {
+        "installer": "John",
+        "orders": [
+            # ORD-0246 has 5 blinds in ERP. Text mentions 4 uninstalls, but installs_txt is None.
+            {"order_number": "ORD-0246", "installs_txt": None, "uninstalls_txt": 4, "reworks_txt": None, "big_ladder": False, "assumed": False},
+        ]
+    }
+]
+il_d2, dl_d2, nf_d2 = mir.calculate_dual_ledger(batches_d2, MOCK_ERP)
+
+# Installs should auto-fetch 5 from ERP, uninstalls should be 4
+# John pay: 5 installs × $3 + 4 uninstalls × $3 = $15 + $12 = $27
+check("Auto-fetch installs from ERP when uninstalls in text: 5 installs + 4 uninstalls = $27",
+    il_d2["John"]["total_pay"] == 27.0,
+    f"got ${il_d2['John']['total_pay']:.2f}")
+
+# VT Thomas charge: (5 + 4) × $4 = $36
+check("VT Thomas charge for auto-fetched installs + uninstalls: 9 blinds × $4 = $36",
+    dl_d2["VT Thomas"]["total_charge"] == 36.0,
+    f"got ${dl_d2['VT Thomas']['total_charge']:.2f}")
+
+
 # Test Case E — Order not found in ERP
 batches_e = [
     {

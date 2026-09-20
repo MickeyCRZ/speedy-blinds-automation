@@ -61,7 +61,7 @@ def _normalise_order_numbers(raw_text: str) -> list[str]:
             {"role": "user",   "content": raw_text},
         ],
         temperature=0,
-        max_tokens=512,
+        max_tokens=4096,
     )
     reply = (resp.choices[0].message.content or "").strip()
 
