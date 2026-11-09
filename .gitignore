@@ -6,13 +6,19 @@ __pycache__/
 
 # Local outputs
 *.log
+*.db
+automate.db
 order_dump.json
 speedy_blinds/unmatched_orders.json
 test_out.txt
+orders.txt
+price_check_results.csv
+price_check_results.txt
+* copy*
 
 # Scratch scripts
 fix_*.py
-test_*.py
+/test_*.py
 run_mock.py
 dump_order.py
 update_tests.py

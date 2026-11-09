@@ -486,3 +486,224 @@ def fetch_all_orders(token: str, page_size: int = 100) -> list[dict]:
         page += 1
 
     return all_orders
+
+
+# ---------------------------------------------------------------------------
+# Ledger & Accounts: Payments, Charges, and Balance Summaries
+# ---------------------------------------------------------------------------
+
+def record_dealer_payment(
+    dealer_id: int,
+    amount: float,
+    order_number: str | None = None,
+    payment_method: str = "EFT",
+    description: str | None = None,
+    token: str | None = None,
+    tenant_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    POST /v1/admin/dealers/{id}/record-payment
+    Creates a ledger payment line in the ERP, updates the order snapshot,
+    recalculates order payment_status, and reduces the dealer's balance owing.
+    """
+    import config as _cfg
+    tok = token or get_token()
+    tid = tenant_id or (_cfg.ERP_TENANT_IDS[0] if _cfg.ERP_TENANT_IDS else 1)
+    url = f"{_cfg.ERP_BASE_URL}/admin/dealers/{dealer_id}/record-payment"
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+
+    # Normalize payment method to 'Cash', 'EFT', or 'CC'
+    pm_upper = (payment_method or "EFT").upper()
+    if "CASH" in pm_upper:
+        clean_method = "Cash"
+    elif "CC" in pm_upper or "CREDIT" in pm_upper:
+        clean_method = "CC"
+    else:
+        clean_method = "EFT"
+
+    payload: dict[str, Any] = {
+        "amount": round(abs(float(amount)), 2),
+        "payment_method": clean_method,
+        "description": description or f"Payment received for {order_number or 'order'}",
+    }
+    if order_number:
+        payload["order_number"] = order_number
+
+    resp = _SESSION.post(url, json=payload, headers=headers, timeout=20)
+    _log_patch(order_number or f"dealer_{dealer_id}", dealer_id, resp.status_code, f"RECORD_PAYMENT ${amount} ({clean_method})")
+
+    if resp.status_code not in (200, 201):
+        err_msg = resp.text
+        try:
+            err_msg = resp.json().get("message", resp.text)
+        except Exception:
+            pass
+        raise RuntimeError(f"ERP record-payment failed ({resp.status_code}): {err_msg}")
+
+    return resp.json()
+
+
+def record_dealer_charge(
+    dealer_id: int,
+    amount: float,
+    order_number: str | None = None,
+    description: str | None = None,
+    token: str | None = None,
+    tenant_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    POST /v1/admin/dealers/{id}/record-charge
+    Creates a ledger charge line in the ERP, updates order snapshot liability,
+    recalculates order payment_status, and increases dealer's balance owing.
+    """
+    import config as _cfg
+    tok = token or get_token()
+    tid = tenant_id or (_cfg.ERP_TENANT_IDS[0] if _cfg.ERP_TENANT_IDS else 1)
+    url = f"{_cfg.ERP_BASE_URL}/admin/dealers/{dealer_id}/record-charge"
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+
+    payload: dict[str, Any] = {
+        "amount": round(abs(float(amount)), 2),
+        "description": description or f"Charge for {order_number or 'order'}",
+    }
+    if order_number:
+        payload["order_number"] = order_number
+
+    resp = _SESSION.post(url, json=payload, headers=headers, timeout=20)
+    _log_patch(order_number or f"dealer_{dealer_id}", dealer_id, resp.status_code, f"RECORD_CHARGE ${amount}")
+
+    if resp.status_code not in (200, 201):
+        err_msg = resp.text
+        try:
+            err_msg = resp.json().get("message", resp.text)
+        except Exception:
+            pass
+        raise RuntimeError(f"ERP record-charge failed ({resp.status_code}): {err_msg}")
+
+    return resp.json()
+
+
+def get_dealer_balance_summary(
+    dealer_id: int,
+    token: str | None = None,
+    tenant_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    GET /v1/admin/dealers/{id}/balance-summary
+    Returns dealer's balance owing, total sales, total charges, total payments,
+    total commission, commission paid, and commission owed.
+    """
+    import config as _cfg
+    tok = token or get_token()
+    tid = tenant_id or (_cfg.ERP_TENANT_IDS[0] if _cfg.ERP_TENANT_IDS else 1)
+    url = f"{_cfg.ERP_BASE_URL}/admin/dealers/{dealer_id}/balance-summary"
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+
+    resp = _SESSION.get(url, headers=headers, timeout=20)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Failed to fetch dealer balance summary ({resp.status_code}): {resp.text[:200]}")
+    return resp.json().get("data", {})
+
+
+def get_accounts_summary(
+    token: str | None = None,
+    tenant_id: int | None = None,
+) -> dict[str, Any]:
+    """
+    GET /v1/admin/accounts-summary
+    Returns global aggregates across all dealer accounts in the current tenant:
+    total_owing, total_sales, total_commission, total_commission_paid,
+    commission_owed, and dealer_count.
+    """
+    import config as _cfg
+    tok = token or get_token()
+    tid = tenant_id or (_cfg.ERP_TENANT_IDS[0] if _cfg.ERP_TENANT_IDS else 1)
+    url = f"{_cfg.ERP_BASE_URL}/admin/accounts-summary"
+    headers = {
+        "Authorization": f"Bearer {tok}",
+        "X-Active-Tenant-Id": str(tid),
+    }
+
+    resp = _SESSION.get(url, headers=headers, timeout=20)
+    if resp.status_code != 200:
+        raise RuntimeError(f"Failed to fetch accounts summary ({resp.status_code}): {resp.text[:200]}")
+    return resp.json().get("data", {})
+
+
+def fetch_order_financial_details(
+    order_number: str,
+    token: str | None = None,
+) -> Optional[dict[str, Any]]:
+    """
+    Look up full financial and dealer details for order_number across all configured
+    tenants for the active company in parallel.
+    Returns dict with erp_id, total_price, payment_status, dealer_id, dealer_name,
+    actual_commission, total_payments_received, and blind_count.
+    """
+    import config as _cfg
+    tok = token or get_token()
+    tenant_ids = _cfg.ERP_TENANT_IDS or [1]
+
+    def _norm(n: str | None) -> str:
+        if not n:
+            return "0"
+        digits = re.sub(r"\D", "", str(n))
+        return digits.lstrip("0") or "0"
+
+    target = _norm(order_number)
+
+    def _search_tid(tid: int) -> Optional[dict[str, Any]]:
+        headers = {
+            "Authorization": f"Bearer {tok}",
+            "X-Active-Tenant-Id": str(tid),
+        }
+        params = {"search": order_number, "per_page": 20}
+        url = f"{_cfg.ERP_BASE_URL}/admin/orders"
+        try:
+            resp = _SESSION.get(url, headers=headers, params=params, timeout=20)
+            if resp.status_code != 200:
+                return None
+            orders = resp.json().get("data", [])
+            for order in orders:
+                if _norm(str(order.get("order_number", ""))) == target:
+                    d_obj = order.get("dealer") or {}
+                    d_name = d_obj.get("name", "") if isinstance(d_obj, dict) else str(d_obj)
+                    d_id = d_obj.get("id") if isinstance(d_obj, dict) else None
+                    lines = order.get("lines") or []
+                    b_count = sum(int(l.get("quantity") or 0) for l in lines)
+                    return {
+                        "erp_id": order.get("id"),
+                        "order_number": order.get("order_number"),
+                        "status": str(order.get("status") or ""),
+                        "payment_status": str(order.get("payment_status") or "due"),
+                        "total_price": float(order.get("total_price") or 0.0),
+                        "total_quoted_price": float(order.get("total_quoted_price") or 0.0),
+                        "total_payments_received": float(order.get("total_payments_received") or 0.0),
+                        "actual_commission": float(order.get("actual_commission") or 0.0),
+                        "dealer_id": d_id,
+                        "dealer_name": d_name,
+                        "blind_count": b_count,
+                        "tenant_id": tid,
+                    }
+        except Exception:
+            return None
+        return None
+
+    with ThreadPoolExecutor(max_workers=len(tenant_ids)) as pool:
+        futures = [pool.submit(_search_tid, tid) for tid in tenant_ids]
+        for f in as_completed(futures):
+            res = f.result()
+            if res:
+                return res
+
+    return None
+

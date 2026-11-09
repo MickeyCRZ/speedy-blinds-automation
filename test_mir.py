@@ -120,9 +120,9 @@ batches_b = [
 ]
 il_b, dl_b, nf_b = mir.calculate_dual_ledger(batches_b, MOCK_ERP)
 
-# Mike: 5 blinds × $3 = $15 (installer always $3 regardless of type)
-check("Mike pay — 5 installs + 5 uninstalls = $25",
-    il_b["Mike"]["total_pay"] == 25.0,
+# Mike: 5 installs × $3 + 5 uninstalls × $3 = $30.00
+check("Mike pay — 5 installs + 5 uninstalls = $30",
+    il_b["Mike"]["total_pay"] == 30.0,
     f"got ${il_b['Mike']['total_pay']:.2f}")
 
 # VT Thomas: 5 × $8 = $40 (uninstall+install dealer rate)
@@ -263,20 +263,20 @@ batches_g = [
     {
         "installer": "Alen",
         "orders": [
-            {"order_number": "ORD-0246", "installs_txt": 5, "uninstalls_txt": 5, "reworks_txt": 0, "big_ladder": True, "assumed": False},
+            {"order_number": "ORD-0246", "installs_txt": 5, "uninstalls_txt": 5, "reworks_txt": 0, "big_ladder": 1, "assumed": False},
         ]
     }
 ]
 il_g, dl_g, nf_g = mir.calculate_dual_ledger(batches_g, MOCK_ERP)
 
-# Alen pay: 5 × $3 + $20 = $35
-check("Stacked: uninstall+install + big_ladder → installer $45",
-    il_g["Alen"]["total_pay"] == 45.0,
+# Alen pay: 4 std × $3 + 5 uninst × $3 + $20 (big ladder) = $12 + $15 + $20 = $47.00
+check("Stacked: uninstall+install + big_ladder → installer $47",
+    il_g["Alen"]["total_pay"] == 47.0,
     f"got ${il_g['Alen']['total_pay']:.2f}")
 
-# VT Thomas: 5 × $8 + $25 = $65
-check("Stacked: uninstall+install + big_ladder → dealer $65",
-    dl_g["VT Thomas"]["total_charge"] == 65.0,
+# VT Thomas: 4 std × $4 + 5 uninst × $4 + $25 (big ladder) = $16 + $20 + $25 = $61.00
+check("Stacked: uninstall+install + big_ladder → dealer $61",
+    dl_g["VT Thomas"]["total_charge"] == 61.0,
     f"got ${dl_g['VT Thomas']['total_charge']:.2f}")
 
 
@@ -286,7 +286,7 @@ batches_h = [
     {
         "installer": "John",
         "orders": [
-            {"order_number": "ORD-0999", "installs_txt": 5, "uninstalls_txt": 0, "reworks_txt": 0, "big_ladder": True, "assumed": False},
+            {"order_number": "ORD-0999", "installs_txt": 0, "uninstalls_txt": 0, "reworks_txt": 0, "big_ladder": 1, "assumed": False},
         ]
     }
 ]
@@ -299,6 +299,116 @@ check("Zero blinds + big ladder → installer gets $20 (ladder only)",
 check("Zero blinds + big ladder → dealer charged $25 (ladder only)",
     dl_h["Phil"]["total_charge"] == 25.0,
     f"got ${dl_h['Phil']['total_charge']:.2f}")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+section("2b. Unit Tests — Tiered Big Ladder Calculation")
+
+check("calc_big_ladder_surcharge(0) == (0, 0)",
+    mir.calc_big_ladder_surcharge(0) == (0.0, 0.0))
+
+check("calc_big_ladder_surcharge(1) == (25, 20)",
+    mir.calc_big_ladder_surcharge(1) == (25.0, 20.0))
+
+check("calc_big_ladder_surcharge(2) == (35, 25)",
+    mir.calc_big_ladder_surcharge(2) == (35.0, 25.0))
+
+check("calc_big_ladder_surcharge(3) == (45, 30)",
+    mir.calc_big_ladder_surcharge(3) == (45.0, 30.0))
+
+check("calc_big_ladder_surcharge(5) == (65, 40)",
+    mir.calc_big_ladder_surcharge(5) == (65.0, 40.0))
+
+# Test Case I — 5 Blinds installed, 1 Big Ladder (user specific rule: 4 x $4 + $25)
+# Order ORD-0246: 5 blinds in ERP. installs_txt = 5, big_ladder = 1.
+# Regular installs: 5 - 1 = 4.
+# Installer pay: 4 × $3 + $20 = $12 + $20 = $32.00
+# Dealer charge: 4 × $4 + $25 = $16 + $25 = $41.00
+batches_ladder1 = [
+    {
+        "installer": "John",
+        "orders": [
+            {"order_number": "ORD-0246", "installs_txt": 5, "uninstalls_txt": 0, "reworks_txt": 0, "big_ladder": 1, "assumed": False},
+        ]
+    }
+]
+il_l1, dl_l1, _ = mir.calculate_dual_ledger(batches_ladder1, MOCK_ERP)
+
+check("5 blinds (1 big ladder) → installer pay 4×$3 + $20 = $32.00",
+    il_l1["John"]["total_pay"] == 32.0,
+    f"got ${il_l1['John']['total_pay']:.2f}")
+
+check("5 blinds (1 big ladder) → dealer charge 4×$4 + $25 = $41.00",
+    dl_l1["VT Thomas"]["total_charge"] == 41.0,
+    f"got ${dl_l1['VT Thomas']['total_charge']:.2f}")
+
+# Test Case J — Dual ledger with N=2 Big Ladder installs out of 5 blinds
+# Order ORD-0246: 5 installs for VT Thomas. big_ladder = 2.
+# Regular installs: 5 - 2 = 3.
+# Installer pay: 3 × $3 + $25 ($20 + $5) = $9 + $25 = $34.00
+# Dealer charge: 3 × $4 + $35 ($25 + $10) = $12 + $35 = $47.00
+batches_ladder2 = [
+    {
+        "installer": "John",
+        "orders": [
+            {"order_number": "ORD-0246", "installs_txt": 5, "uninstalls_txt": 0, "reworks_txt": 0, "big_ladder": 2, "assumed": False},
+        ]
+    }
+]
+il_l2, dl_l2, _ = mir.calculate_dual_ledger(batches_ladder2, MOCK_ERP)
+
+check("2 Big Ladder installs out of 5 → installer pay 3×$3 + $25 = $34",
+    il_l2["John"]["total_pay"] == 34.0,
+    f"got ${il_l2['John']['total_pay']:.2f}")
+
+check("2 Big Ladder installs out of 5 → dealer charge 3×$4 + $35 = $47",
+    dl_l2["VT Thomas"]["total_charge"] == 47.0,
+    f"got ${dl_l2['VT Thomas']['total_charge']:.2f}")
+
+# Test Case K — Dual ledger with N=3 Big Ladder installs out of 5 blinds
+# Order ORD-0246: 5 installs for VT Thomas. big_ladder = 3.
+# Regular installs: 5 - 3 = 2.
+# Installer pay: 2 × $3 + $30 ($20 + 2×$5) = $6 + $30 = $36.00
+# Dealer charge: 2 × $4 + $45 ($25 + 2×$10) = $8 + $45 = $53.00
+batches_ladder3 = [
+    {
+        "installer": "John",
+        "orders": [
+            {"order_number": "ORD-0246", "installs_txt": 5, "uninstalls_txt": 0, "reworks_txt": 0, "big_ladder": 3, "assumed": False},
+        ]
+    }
+]
+il_l3, dl_l3, _ = mir.calculate_dual_ledger(batches_ladder3, MOCK_ERP)
+
+check("3 Big Ladder installs out of 5 → installer pay 2×$3 + $30 = $36",
+    il_l3["John"]["total_pay"] == 36.0,
+    f"got ${il_l3['John']['total_pay']:.2f}")
+
+check("3 Big Ladder installs out of 5 → dealer charge 2×$4 + $45 = $53",
+    dl_l3["VT Thomas"]["total_charge"] == 53.0,
+    f"got ${dl_l3['VT Thomas']['total_charge']:.2f}")
+
+# Test Case L — Big Ladder uninstalls treated as normal uninstalls (no surcharge)
+# Order ORD-0402: 6 uninstalls for Han. big_ladder = 0 (uninstalls do not get surcharge).
+# Installer pay: 6 × $3 = $18.00
+# Dealer charge: 6 × $4 = $24.00
+batches_ladder_uninst = [
+    {
+        "installer": "John",
+        "orders": [
+            {"order_number": "ORD-0402", "installs_txt": 0, "uninstalls_txt": 6, "reworks_txt": 0, "big_ladder": 0, "assumed": False},
+        ]
+    }
+]
+il_lu, dl_lu, _ = mir.calculate_dual_ledger(batches_ladder_uninst, MOCK_ERP)
+
+check("Big ladder uninstalls as normal uninstalls → installer pay $18 (no ladder surcharge)",
+    il_lu["John"]["total_pay"] == 18.0,
+    f"got ${il_lu['John']['total_pay']:.2f}")
+
+check("Big ladder uninstalls as normal uninstalls → dealer charge $24 (no ladder surcharge)",
+    dl_lu["Han"]["total_charge"] == 24.0,
+    f"got ${dl_lu['Han']['total_charge']:.2f}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -513,33 +623,33 @@ SIM_BATCHES = [
 il_sim, dl_sim, nf_sim = mir.calculate_dual_ledger(SIM_BATCHES, MOCK_ERP)
 
 # Expected values
-# John: ORD-0246 (5 blinds × $3=$15) + ORD-0305 (3 blinds × $3 + $20=$29) = $44
-# Mike: ORD-0201 (10 × $3=$30) + ORD-0198 (4 × $3=$12) = $42
+# John: ORD-0246 (5 blinds × $3=$15) + ORD-0305 (2 std I×$3 + 5U×$3 + $20 ladder = $41) = $56
+# Mike: ORD-0201 (10 × $3=$30) + ORD-0198 (6U × $3=$18) = $48
 # Alen: ORD-0402 (6 × $3=$18) + ORD-0500 (not found=$0) = $18
 
-check("John total pay = $50.00", il_sim["John"]["total_pay"] == 50.0, f"got ${il_sim['John']['total_pay']:.2f}")
-check("Mike total pay = $38.00", il_sim["Mike"]["total_pay"] == 38.0, f"got ${il_sim['Mike']['total_pay']:.2f}")
+check("John total pay = $56.00", il_sim["John"]["total_pay"] == 56.0, f"got ${il_sim['John']['total_pay']:.2f}")
+check("Mike total pay = $48.00", il_sim["Mike"]["total_pay"] == 48.0, f"got ${il_sim['Mike']['total_pay']:.2f}")
 check("Alen total pay = $18.00", il_sim["Alen"]["total_pay"] == 18.0, f"got ${il_sim['Alen']['total_pay']:.2f}")
 
 grand_pay_sim = sum(d["total_pay"] for d in il_sim.values())
-check("Grand installer total = $106.00", grand_pay_sim == 106.0, f"got ${grand_pay_sim:.2f}")
+check("Grand installer total = $122.00", grand_pay_sim == 122.0, f"got ${grand_pay_sim:.2f}")
 
 # Dealer expected:
-# VT Thomas: ORD-0246 (5 × $4=$20) + ORD-0305 (3 × $8 + $25=$49) = $69
+# VT Thomas: ORD-0246 (5 × $4=$20) + ORD-0305 (2 std I×$4 + 5U×$4 + $25 ladder = $53) = $73
 # Phil:      ORD-0201 (10 × $4=$40)
-# Alen:      ORD-0198 (4 × $4=$16)
+# Alen:      ORD-0198 (6 × $4=$24)
 # Han:       ORD-0402 (6 × $4=$24)
 
-check("VT Thomas charge = $69.00",
-    dl_sim["VT Thomas"]["total_charge"] == 69.0,
+check("VT Thomas charge = $73.00",
+    dl_sim["VT Thomas"]["total_charge"] == 73.0,
     f"got ${dl_sim['VT Thomas']['total_charge']:.2f}")
 
 check("Phil charge = $40.00",
     dl_sim["Phil"]["total_charge"] == 40.0,
     f"got ${dl_sim['Phil']['total_charge']:.2f}")
 
-check("Alen (dealer) charge = $16.00",
-    dl_sim["Alen"]["total_charge"] == 16.0,
+check("Alen (dealer) charge = $24.00",
+    dl_sim["Alen"]["total_charge"] == 24.0,
     f"got ${dl_sim['Alen']['total_charge']:.2f}")
 
 check("Han charge = $24.00",
@@ -547,7 +657,7 @@ check("Han charge = $24.00",
     f"got ${dl_sim['Han']['total_charge']:.2f}")
 
 grand_charge_sim = sum(d["total_charge"] for d in dl_sim.values())
-check("Grand dealer total = $149.00", grand_charge_sim == 149.0, f"got ${grand_charge_sim:.2f}")
+check("Grand dealer total = $161.00", grand_charge_sim == 161.0, f"got ${grand_charge_sim:.2f}")
 
 check("ORD-0500 is in not_found", "ORD-0500" in nf_sim, f"not_found={nf_sim}")
 

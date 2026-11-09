@@ -44,7 +44,14 @@ def _get_system_prompt() -> str:
 
         Rules for ORDERS (type="order"):
         - order_number: format strictly as ORD-XXXX (e.g. "ON 121" → "ORD-0121").
-        - amount: the dollar amount stated in the message for this order.
+        - CRITICAL: A 3 or 4-digit number at the START of a line is ALWAYS the order number — NEVER treat it as qty or amount.
+          Real examples of the exact format used in these messages:
+            "0905 vtt = 11"           → order_number="ORD-0905", dealer="VT Thomas", qty=11
+            "0937 Alen - Faisal = 10" → order_number="ORD-0937", dealer="Alen", customer_name="Faisal", qty=10
+            "0829 Kamal - Justin = 8" → order_number="ORD-0829", dealer="Komal", customer_name="Justin", qty=8
+            "0914 vtt - bhakshi = 6"  → order_number="ORD-0914", dealer="VT Thomas", customer_name="bhakshi", qty=6
+          In ALL these cases: the first number = order number, the name after it = dealer, the name after dash = customer, the number after "=" = qty.
+        - amount: the dollar amount stated in the message for this order (number after "$", NOT the number after "=").
         - customer_name, qty, motors, remotes, solars, chargers as seen in message.
 
         Rules for REWORKS (type="rework"):
@@ -71,6 +78,7 @@ def _get_system_prompt() -> str:
           • "sneha" → "Mathew"
           • "jeffrin" → "Jeff"
           • "philip", "philemon", "chacko" → "Phil"
+          • "pawan", "pawanpreet", "pavan", "pawan singh", "pawanpreet singh" → "Pawanpreet"
         - Strip any currency symbols from amount.
         - Do NOT include payment entries, totals, or summary rows — only per-order/per-rework rows.
         - "Total blinds" lines and similar summaries must be ignored.

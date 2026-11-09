@@ -147,8 +147,9 @@ SPEEDY_DEALER_SHEETS: dict[str, str] = {
     "Joseph":    "12f1_iP6O_Rnp9Ze4bKbjF1zBMYeWxJFutvNc1OzZXb0",
     "Nithin":    "1kstbKMPhgnf3vPuZ7EEpL8cJrgaLQdChEu5eJ5AGGNA",
     "Jeff":      "1o8DwXb-yN_xjLp0L8xIA29swgFE9aYzUuD6gq3BeibU",
-    "Karanveer": "1ZNVGZWBxTYxHjQL-nh5bcMfZCni5Xh3dD60fYhHo8X4",
-    "Hammad":    "1pbI7cMEbZL1zX_ddrE0cLpU3KdGdsiHDt21EfXSW3WY",
+    "Karanveer":  "1ZNVGZWBxTYxHjQL-nh5bcMfZCni5Xh3dD60fYhHo8X4",
+    "Hammad":     "1pbI7cMEbZL1zX_ddrE0cLpU3KdGdsiHDt21EfXSW3WY",
+    "Pawanpreet": "1532d1eFLwxrOM03tAxNN0W1l3uFTNNddrJ0eLoBTP3E",
 }
 
 # Fuzzy-match aliases (lowercase → canonical dealer name)
@@ -184,8 +185,13 @@ SPEEDY_DEALER_ALIASES: dict[str, str] = {
     "nithin":     "Nithin",
     "jeff":       "Jeff",
     "jeffrin":    "Jeff",
-    "karanveer":  "Karanveer",
-    "hammad":     "Hammad",
+    "karanveer":       "Karanveer",
+    "hammad":          "Hammad",
+    "pawanpreet":      "Pawanpreet",
+    "pawan":           "Pawanpreet",
+    "pavan":           "Pawanpreet",
+    "pawanpreet singh": "Pawanpreet",
+    "pawan singh":     "Pawanpreet",
 }
 
 # ---------------------------------------------------------------------------
@@ -203,6 +209,8 @@ INSPIRA_DEALER_SHEETS: dict[str, str] = {
     "Navtej":    "1Blk9GJYIIgbCTBUUEJCPIhBJd9ZSuQvTtCQZyQdDfOo",
     "Jaspreet":  "1meA8yAZtkEWChPOg3gOaJS6kRH9_Wx9dZiLQLJLGwro",
     "Chirag":    "1svAPPOB8AGd05Q8lVJYr3RGY8OozIKNXFtT7O1_c4jw",
+    "Sarbjeet":  "1bi5NOnmdR1VCfKEg3wi5CO6onyqPA6Z3TNk_Khq17Ds",
+    "Qazi":      "1M-4B9l9-iXiaxskcBssWRF_RpO7Rvr5oucz93MsNvXU",
 }
 
 INSPIRA_DEALER_ALIASES: dict[str, str] = {
@@ -223,6 +231,8 @@ INSPIRA_DEALER_ALIASES: dict[str, str] = {
     "navtej":       "Navtej",
     "jaspreet":     "Jaspreet",
     "chirag":       "Chirag",
+    "sarbjeet":     "Sarbjeet",
+    "qazi":         "Qazi",
 }
 
 # Active defaults (overridden by set_company() at runtime)
@@ -245,3 +255,17 @@ HOUSTON_DEALER_ALIASES: dict[str, str] = {
     "jubin":  "Jubin",
     "victor": "Victor",
 }
+
+# ---------------------------------------------------------------------------
+# Dynamic Dealer Configuration (loads and syncs with dealers.json)
+# ---------------------------------------------------------------------------
+try:
+    import dealers_manager
+    dealers_manager.sync_to_config_module()
+except Exception:
+    try:
+        from speedy_blinds import dealers_manager
+        dealers_manager.sync_to_config_module()
+    except Exception:
+        pass
+

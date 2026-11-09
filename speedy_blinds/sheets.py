@@ -32,6 +32,10 @@ SCOPES = [
 _LAST_COLUMN = chr(ord(FIRST_COLUMN) + WRITE_COLUMNS - 1)
 _RANGE_TEMPLATE = f"{SHEET_TAB}!{FIRST_COLUMN}:{_LAST_COLUMN}"
 
+# Export for backward compatibility with older scripts and tests
+DEALER_SHEETS = getattr(config, "DEALER_SHEETS", {})
+DEALER_ALIASES = getattr(config, "DEALER_ALIASES", {})
+
 
 def _execute_with_retry(request, max_retries=4):
     """Execute a Google API request with exponential backoff on 500-level and rate-limit errors."""
@@ -106,18 +110,117 @@ def _order_to_row(order: dict) -> list:
         qty_val = order.get("qty") if order.get("qty") is not None else ""
 
     dealer = order.get("dealer")
+    amount = order.get("amount")
+    price = order.get("price")
+    final_cost = amount if amount is not None else price
+
     base_row = [
         date_str,
         order_num,
         customer_name,
         qty_val,
-        order.get("price") if order.get("price") is not None else "",
+        final_cost if final_cost is not None else "",
     ]
 
     if dealer in ["Phil", "Alen"]:
         return [month_str, ""] + base_row
     else:
         return [month_str] + base_row
+
+
+def _build_order_row_and_range(order: dict, next_row: int, cfg: dict | None = None, sheet_type: str = "new") -> tuple[list, str]:
+    """
+    Build the contiguous row values array and target range string based on configured columns.
+    Dynamically positions Month, Date, Order #, Customer Name, Quantity, and Price/Cost.
+    """
+    cfg = cfg or {}
+    tab_name = cfg.get("tab_name", SHEET_TAB)
+
+    # Resolve configured column letters (fallback to Old vs New defaults)
+    month_col = (cfg.get("month_col") or ("A" if sheet_type == "old" else "B")).upper()
+    date_col = (cfg.get("date_col") or "C").upper()
+    order_col = (cfg.get("order_col") or "D").upper()
+    customer_col = (cfg.get("customer_col") or "E").upper()
+    qty_col = (cfg.get("qty_col") or "F").upper()
+    price_col = (cfg.get("price_col") or "G").upper()
+
+    is_rework = str(order.get("type") or "").lower() == "rework"
+    raw_date = str(order.get("date") or "").strip()
+    month_str = ""
+    date_str = raw_date
+    if raw_date:
+        try:
+            d = datetime.strptime(raw_date, "%Y-%m-%d")
+            month_str = d.strftime("%B")
+            date_str = f"{d.day}-{d.strftime('%B-%Y')}"
+        except ValueError:
+            pass
+
+    order_num = str(order.get("order_number") or "").strip()
+    if not is_rework:
+        if order_num and not order_num.upper().startswith("ORD-"):
+            if order_num.isdigit():
+                order_num = f"ORD-{int(order_num):04d}"
+            else:
+                order_num = f"ORD-{order_num}"
+
+    if is_rework:
+        customer_name = ""
+        qty_val = ""
+    else:
+        customer_name = str(order.get("customer_name") or "").strip().title()
+        if order.get("unknown_dealer_fallback") and order.get("original_dealer"):
+            customer_name = f"{customer_name} (Dealer: {order.get('original_dealer')})"
+        qty_val = order.get("qty") if order.get("qty") is not None else ""
+
+    amount = order.get("amount")
+    price = order.get("price")
+    final_cost = amount if amount is not None else price
+    cost_val = final_cost if final_cost is not None else ""
+
+    # Map column letter -> cell value
+    col_map = {}
+    if month_col:
+        col_map[month_col] = month_str
+    if date_col:
+        col_map[date_col] = date_str
+    if order_col:
+        col_map[order_col] = order_num
+    if customer_col:
+        col_map[customer_col] = customer_name
+    if qty_col:
+        col_map[qty_col] = qty_val
+    if price_col:
+        col_map[price_col] = cost_val
+
+    def col_to_num(col: str) -> int:
+        num = 0
+        for ch in col.upper():
+            num = num * 26 + (ord(ch) - ord('A') + 1)
+        return num
+
+    def num_to_col(num: int) -> str:
+        s = ""
+        while num > 0:
+            num, r = divmod(num - 1, 26)
+            s = chr(65 + r) + s
+        return s
+
+    sorted_cols = sorted(col_map.keys(), key=col_to_num)
+    min_col_num = col_to_num(sorted_cols[0])
+    max_col_num = col_to_num(sorted_cols[-1])
+    min_col_str = num_to_col(min_col_num)
+    max_col_str = num_to_col(max_col_num)
+
+    row_len = max_col_num - min_col_num + 1
+    row_values = [""] * row_len
+
+    for c, val in col_map.items():
+        offset = col_to_num(c) - min_col_num
+        row_values[offset] = val
+
+    target_range = f"{tab_name}!{min_col_str}{next_row}:{max_col_str}{next_row}"
+    return row_values, target_range
 
 
 
@@ -188,40 +291,68 @@ def write_order(order: dict) -> dict:
     if not dealer:
         raise ValueError(f"Order has no dealer: {order}")
 
-    sheet_id = config.DEALER_SHEETS.get(dealer)
+    # Resolve canonical dealer name from aliases (case-insensitive)
+    alias_map = globals().get("DEALER_ALIASES", getattr(config, "DEALER_ALIASES", {}))
+    canonical_dealer = alias_map.get(str(dealer).strip().lower(), dealer)
+    sheets_map = globals().get("DEALER_SHEETS", getattr(config, "DEALER_SHEETS", {}))
+    sheet_id = sheets_map.get(canonical_dealer) or sheets_map.get(dealer) or config.DEALER_SHEETS.get(canonical_dealer) or config.DEALER_SHEETS.get(dealer)
+    if not sheet_id:
+        try:
+            from speedy_blinds import dealers_manager
+            dinfo = dealers_manager.get_dealer_info(dealer)
+            if dinfo and dinfo.get("sheet_id"):
+                canonical_dealer = dinfo["dealer_name"]
+                sheet_id = dinfo["sheet_id"]
+        except Exception:
+            pass
+
+    if sheet_id:
+        dealer = canonical_dealer
+        order["dealer"] = canonical_dealer
+
     if not sheet_id or sheet_id == "SPREADSHEET_ID_HERE":
         raise ValueError(
             f"No spreadsheet ID configured for dealer '{dealer}'. "
             f"Edit DEALER_SHEETS in config.py."
         )
 
-    row = _order_to_row(order)
-    body = {"values": [row]}
+    # Load sheet configs and determine sheet type
+    dinfo = None
+    configs = {}
+    try:
+        from speedy_blinds import dealers_manager
+        dinfo = dealers_manager.get_dealer_info(dealer)
+        configs = dealers_manager.get_sheet_configs()
+    except Exception:
+        pass
+
+    sheet_type = dinfo.get("sheet_type", "new") if dinfo else ("old" if dealer in ["Phil", "Alen"] else "new")
+    cfg = configs.get(sheet_type, configs.get("new", {}))
+    tab_name = cfg.get("tab_name", SHEET_TAB)
 
     try:
         service = _get_service()
         
-        # Find the last populated row based on column B or D
+        # Find the last populated row across all columns A to M
+        # This guarantees that order lines, rework lines, EFT/Cash payments (in H/I/J/L),
+        # comments (in K), and lump-sum deposit rows are NEVER touched or overwritten!
         req_get = service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
-            range=f"{SHEET_TAB}!B:D"
+            range=f"{tab_name}!A:M"
         )
         read_result = _execute_with_retry(req_get)
         
         values = read_result.get("values", [])
         last_row = 0
         for i, row_data in enumerate(values):
-            b_val = str(row_data[0]).strip() if len(row_data) > 0 else ""
-            d_val = str(row_data[2]).strip() if len(row_data) > 2 else ""
-            if b_val or d_val:
+            # If ANY cell in this row is non-empty, the row is occupied and protected
+            if any(str(cell).strip() for cell in row_data):
                 last_row = i + 1
         
         next_row = max(last_row + 1, 1)
-        
-        if dealer in ["Phil", "Alen"]:
-            target_range = f"{SHEET_TAB}!A{next_row}:G{next_row}"
-        else:
-            target_range = f"{SHEET_TAB}!B{next_row}:G{next_row}"
+
+        row_values, target_range = _build_order_row_and_range(order, next_row, cfg=cfg, sheet_type=sheet_type)
+        body = {"values": [row_values]}
 
         req_update = (
             service.spreadsheets()

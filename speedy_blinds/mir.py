@@ -15,14 +15,15 @@ Flow:
   7. Send single combined HTML email with full per-order breakdowns
 
 Rates:
-  ┌─────────────────────┬──────────────┬────────────────┐
-  │ Job Type            │ Dealer Charge│ Installer Pay  │
-  ├─────────────────────┼──────────────┼────────────────┤
-  │ Install             │ $4.00/blind  │ $3.00/blind    │
-  │ Uninstall + Install │ $8.00/blind  │ $3.00/blind    │
-  │ Uninstall Only      │ $4.00/blind  │ $3.00/blind    │
-  │ Big Ladder (modifier│ +$25.00/order│ +$20.00/order  │
-  └─────────────────────┴──────────────┴────────────────┘
+  ┌─────────────────────┬──────────────────────────┬────────────────────────┐
+  │ Job Type            │ Dealer Charge            │ Installer Pay          │
+  ├─────────────────────┼──────────────────────────┼────────────────────────┤
+  │ Install             │ $4.00/blind              │ $3.00/blind            │
+  │ Uninstall + Install │ $8.00/blind              │ $3.00/blind            │
+  │ Uninstall Only      │ $4.00/blind              │ $3.00/blind            │
+  │ Big Ladder (1st)    │ +$25.00/order            │ +$20.00/order          │
+  │ Big Ladder (>1 addl)│ +$10.00/addl install     │ +$5.00/addl install    │
+  └─────────────────────┴──────────────────────────┴────────────────────────┘
 """
 
 from __future__ import annotations
@@ -60,13 +61,36 @@ MAGENTA = lambda t: _c("35", t)
 # ── Rate constants ───────────────────────────────────────────────────────────
 # What we charge dealers per blind
 DEALER_RATE_BLIND    = 4.00
-DEALER_BIG_LADDER    = 25.00   # flat per order (on top of blind rate)
+DEALER_BIG_LADDER_FIRST  = 25.00   # flat for 1st big ladder install
+DEALER_BIG_LADDER_EXTRA  = 10.00   # flat per additional big ladder install (>1)
+DEALER_BIG_LADDER        = 25.00   # backward compatibility
 
 # What we pay installers per blind
 INSTALLER_RATE_INSTALL   = 3.00
 INSTALLER_RATE_UNINSTALL = 3.00
 INSTALLER_RATE_REWORK    = 3.00
-INSTALLER_BIG_LADDER     = 20.00   # flat per order (on top of blind pay)
+INSTALLER_BIG_LADDER_FIRST = 20.00 # flat for 1st big ladder install
+INSTALLER_BIG_LADDER_EXTRA = 5.00  # flat per additional big ladder install (>1)
+INSTALLER_BIG_LADDER       = 20.00 # backward compatibility
+
+
+def calc_big_ladder_surcharge(count: int) -> tuple[float, float]:
+    """
+    Compute Big Ladder fee as (dealer_charge, installer_pay).
+    - count <= 0: (0.0, 0.0)
+    - count == 1: ($25.00, $20.00)
+    - count > 1:  ($25 + (count-1)*$10, $20 + (count-1)*$5)
+
+    Note: Big Ladder fee ALREADY INCLUDES the installation charge/pay for those
+    specific blinds. Therefore, standard install rate ($4 dealer / $3 installer)
+    is only applied to max(0, total_installs - count).
+    Big ladder uninstalls are normal uninstalls and do NOT count towards this fee.
+    """
+    if count <= 0:
+        return 0.0, 0.0
+    dealer = DEALER_BIG_LADDER_FIRST + (count - 1) * DEALER_BIG_LADDER_EXTRA
+    installer = INSTALLER_BIG_LADDER_FIRST + (count - 1) * INSTALLER_BIG_LADDER_EXTRA
+    return dealer, installer
 
 # ── Rework ID counter (session-scoped) ───────────────────────────────────────
 _rework_counter = 0
@@ -127,8 +151,11 @@ def parse_order_jobs(raw_text: str) -> list[dict]:
         "- MUST be one of the known dealers or a close alias. Known dealers: "
         f"{', '.join(sorted(dealers))}\n\n"
         "Big ladder rules:\n"
-        "- big_ladder = true if the text mentions big ladder, tall ladder, extra ladder, "
-        "high ceiling, or ladder surcharge for that specific entry\n\n"
+        "- big_ladder: integer count of blinds/items installed using a big ladder, tall ladder, or high ceiling.\n"
+        "- If the text mentions big ladder without a count (e.g. 'ON 246 big ladder'), set big_ladder to 1.\n"
+        "- If the text specifies a count (e.g. 'ON 246 - 5 installed, 2 big ladder' or '3 big ladder'), extract that count (e.g. 2, 3).\n"
+        "- If not mentioned, set big_ladder to 0.\n"
+        "- IMPORTANT: Big ladder uninstalls/removals are treated as normal uninstalls — do NOT count them in big_ladder.\n\n"
         "Rework without order number:\n"
         "- If a rework entry has no order number (e.g. 'rework installed 2 blinds'), "
         'set order to empty string "" and reworks to 2.\n\n'
@@ -139,7 +166,7 @@ def parse_order_jobs(raw_text: str) -> list[dict]:
         "Return ONLY a valid JSON array. No markdown fences, no explanation.\n\n"
         "Output format (exactly):\n"
         '[{"order": "<raw order ref or empty>", "installs": <int|null>, "uninstalls": <int|null>, '
-        '"reworks": <int|null>, "dealer": "<string or null>", "big_ladder": <true|false>, "assumed": <true|false>}, ...]'
+        '"reworks": <int|null>, "dealer": "<string or null>", "big_ladder": <int>, "assumed": <true|false>}, ...]'
     )
 
     try:
@@ -188,7 +215,17 @@ def parse_order_jobs(raw_text: str) -> list[dict]:
             continue
 
         raw_order      = str(item.get("order", "")).strip()
-        big_ladder     = bool(item.get("big_ladder", False))
+        raw_bl         = item.get("big_ladder", 0)
+        if isinstance(raw_bl, bool):
+            big_ladder = 1 if raw_bl else 0
+        elif isinstance(raw_bl, (int, float)):
+            big_ladder = max(0, int(raw_bl))
+        elif isinstance(raw_bl, str) and raw_bl.isdigit():
+            big_ladder = int(raw_bl)
+        elif isinstance(raw_bl, str) and raw_bl.lower() in ("true", "yes", "y"):
+            big_ladder = 1
+        else:
+            big_ladder = 0
         assumed        = bool(item.get("assumed", False))
         
         def _get_int(key: str) -> int | None:
@@ -223,7 +260,7 @@ def parse_order_jobs(raw_text: str) -> list[dict]:
             idx      = seen[order_number]
             existing = result[idx]
             if big_ladder:
-                existing["big_ladder"] = True
+                existing["big_ladder"] = max(existing.get("big_ladder", 0), big_ladder)
             if not assumed:
                 existing["assumed"] = False
             
@@ -259,7 +296,16 @@ def _print_batch_preview(installer: str, orders: list[dict]) -> None:
     """Print a formatted table of parsed orders for one installer."""
     rows = []
     for i, o in enumerate(orders, 1):
-        ladder_str = "🔺 +$20" if o.get("big_ladder") else DIM("—")
+        bl_count = o.get("big_ladder") or 0
+        if isinstance(bl_count, bool):
+            bl_count = 1 if bl_count else 0
+        if bl_count > 1:
+            _, fee = calc_big_ladder_surcharge(bl_count)
+            ladder_str = f"🔺 {bl_count}x (+${fee:.0f})"
+        elif bl_count == 1:
+            ladder_str = "🔺 +$20"
+        else:
+            ladder_str = DIM("—")
         assumed    = " ⚠ assumed" if o.get("assumed") else ""
         is_rework  = (o.get("reworks_txt") or 0) > 0
 
@@ -464,11 +510,22 @@ def _edit_batch(installer: str, orders: list[dict]) -> list[dict]:
         order["assumed"] = False
 
         # ── Big Ladder ────────────────────────────────────────────────────
-        bl = input("    Big Ladder? [Y/N] (Enter to keep): ").strip().lower()
-        if bl == "y":
-            order["big_ladder"] = True
-        elif bl == "n":
-            order["big_ladder"] = False
+        cur_bl = order.get("big_ladder") or 0
+        if isinstance(cur_bl, bool):
+            cur_bl = 1 if cur_bl else 0
+        bl_display = f"{cur_bl} blind{'s' if cur_bl != 1 else ''}" if cur_bl else "None"
+        bl = input(f"    Big Ladder install count (current: {CYAN(bl_display)}) [0, 1, 2... or Y/N] (Enter to keep): ").strip().lower()
+        if bl in ("y", "yes"):
+            order["big_ladder"] = 1
+            print(GREEN("    ✓ Big Ladder set to 1"))
+        elif bl in ("n", "no"):
+            order["big_ladder"] = 0
+            print(GREEN("    ✓ Big Ladder removed (0)"))
+        elif bl.isdigit():
+            order["big_ladder"] = int(bl)
+            print(GREEN(f"    ✓ Big Ladder set to {int(bl)}"))
+        elif bl != "":
+            print(YELLOW(f"    ⚠ Unrecognized input '{bl}', keeping current value ({cur_bl})"))
 
         print(GREEN(f"  ✓ {order['order_number']} updated."))
 
@@ -751,7 +808,14 @@ def calculate_dual_ledger(
 
         for o in batch["orders"]:
             order_num  = o["order_number"]
-            big_ladder = o.get("big_ladder", False)
+            raw_ladder = o.get("big_ladder", 0)
+            if isinstance(raw_ladder, bool):
+                big_ladder = 1 if raw_ladder else 0
+            else:
+                try:
+                    big_ladder = max(0, int(raw_ladder or 0))
+                except (ValueError, TypeError):
+                    big_ladder = 0
 
             # Track for duplicate warnings
             order_to_installers.setdefault(order_num, []).append(installer)
@@ -815,15 +879,20 @@ def calculate_dual_ledger(
             )
 
             # Financial computation
+            # Big Ladder fee already includes installation for those specific blinds.
+            # Standard install rate ($4 dealer / $3 installer) applies only to remaining regular installs.
+            regular_installs = max(0, installs - big_ladder)
+            dealer_ladder_fee, installer_ladder_fee = calc_big_ladder_surcharge(big_ladder)
+
             installer_pay = (
-                installs * INSTALLER_RATE_INSTALL
+                regular_installs * INSTALLER_RATE_INSTALL
                 + uninstalls * INSTALLER_RATE_UNINSTALL
                 + reworks * INSTALLER_RATE_REWORK
-                + (INSTALLER_BIG_LADDER if big_ladder else 0)
+                + installer_ladder_fee
             )
             dealer_charge = (
-                total_actions * DEALER_RATE_BLIND
-                + (DEALER_BIG_LADDER if big_ladder else 0)
+                (regular_installs + uninstalls + reworks) * DEALER_RATE_BLIND
+                + dealer_ladder_fee
             )
 
             fuzzy_dealer = _fuzzy_match(dealer_name, list(config.DEALER_ALIASES.values())) or dealer_name
@@ -837,14 +906,15 @@ def calculate_dual_ledger(
             # Installer ledger entry
             installer_ledger[installer]["total_pay"] += installer_pay
             installer_ledger[installer]["orders"].append({
-                "order_number":  order_num,
-                "dealer":        fuzzy_dealer,
-                "installs":      installs,
-                "uninstalls":    uninstalls,
-                "reworks":       reworks,
-                "big_ladder":    big_ladder,
-                "installer_pay": installer_pay,
-                "dealer_charge": dealer_charge,
+                "order_number":    order_num,
+                "dealer":          fuzzy_dealer,
+                "installs":        installs,
+                "regular_installs": regular_installs,
+                "uninstalls":      uninstalls,
+                "reworks":         reworks,
+                "big_ladder":      big_ladder,
+                "installer_pay":   installer_pay,
+                "dealer_charge":   dealer_charge,
             })
 
             # Dealer ledger entry — use fuzzy_dealer as key so aliases merge
@@ -855,13 +925,14 @@ def calculate_dual_ledger(
                     "self_orders":  [],   # self-installs — shown separately, excluded from total
                 }
             entry = {
-                "order_number": order_num,
-                "installer":    installer,
-                "installs":     installs,
-                "uninstalls":   uninstalls,
-                "reworks":      reworks,
-                "big_ladder":   big_ladder,
-                "charge":       dealer_charge,
+                "order_number":    order_num,
+                "installer":       installer,
+                "installs":        installs,
+                "regular_installs": regular_installs,
+                "uninstalls":      uninstalls,
+                "reworks":         reworks,
+                "big_ladder":      big_ladder,
+                "charge":          dealer_charge,
             }
             if is_self_install:
                 dealer_ledger[fuzzy_dealer]["self_orders"].append(entry)
@@ -900,7 +971,16 @@ def display_dual_summary(
     for installer, data in sorted(installer_ledger.items()):
         rows = []
         for o in data["orders"]:
-            ladder_str = "🔺 +$20" if o["big_ladder"] else "—"
+            bl = o.get("big_ladder", 0)
+            if isinstance(bl, bool):
+                bl = 1 if bl else 0
+            if bl > 1:
+                _, fee = calc_big_ladder_surcharge(bl)
+                ladder_str = f"🔺 {bl}x (+${fee:.0f})"
+            elif bl == 1:
+                ladder_str = "🔺 +$20"
+            else:
+                ladder_str = "—"
             rows.append([
                 o["order_number"],
                 o["dealer"] + (" (Self)" if o.get("self_install") else ""),
@@ -933,7 +1013,16 @@ def display_dual_summary(
     for dealer, data in sorted(dealer_ledger.items()):
         rows = []
         for o in data["orders"]:
-            ladder_str = "🔺 +$25" if o["big_ladder"] else "—"
+            bl = o.get("big_ladder", 0)
+            if isinstance(bl, bool):
+                bl = 1 if bl else 0
+            if bl > 1:
+                fee, _ = calc_big_ladder_surcharge(bl)
+                ladder_str = f"🔺 {bl}x (+${fee:.0f})"
+            elif bl == 1:
+                ladder_str = "🔺 +$25"
+            else:
+                ladder_str = "—"
             rows.append([
                 o["order_number"],
                 o["installer"],
@@ -958,7 +1047,16 @@ def display_dual_summary(
         if self_orders:
             self_rows = []
             for o in self_orders:
-                ladder_str = "🔺 +$25" if o["big_ladder"] else "—"
+                bl = o.get("big_ladder", 0)
+                if isinstance(bl, bool):
+                    bl = 1 if bl else 0
+                if bl > 1:
+                    fee, _ = calc_big_ladder_surcharge(bl)
+                    ladder_str = f"🔺 {bl}x (+${fee:.0f})"
+                elif bl == 1:
+                    ladder_str = "🔺 +$25"
+                else:
+                    ladder_str = "—"
                 self_rows.append([
                     o["order_number"],
                     o["installer"],
@@ -1053,7 +1151,16 @@ def _build_mir_plain(
     for installer, data in sorted(installer_ledger.items()):
         lines += ["", f"  {installer}:"]
         for o in data["orders"]:
-            ladder = f" + Big Ladder (${INSTALLER_BIG_LADDER:.0f})" if o["big_ladder"] else ""
+            bl = o.get("big_ladder", 0)
+            if isinstance(bl, bool):
+                bl = 1 if bl else 0
+            if bl > 1:
+                _, fee = calc_big_ladder_surcharge(bl)
+                ladder = f" (incl. Big Ladder {bl} blinds = ${fee:.0f})"
+            elif bl == 1:
+                ladder = f" (incl. Big Ladder ${INSTALLER_BIG_LADDER_FIRST:.0f})"
+            else:
+                ladder = ""
             counts = f"{o['installs']}I, {o['uninstalls']}U, {o['reworks']}R"
             lines.append(
                 f"    {o['order_number']}  [{counts}]  "
@@ -1073,7 +1180,16 @@ def _build_mir_plain(
     for dealer, data in sorted(dealer_ledger.items()):
         lines += ["", f"  {dealer}:"]
         for o in data["orders"]:
-            ladder = f" + Big Ladder (${DEALER_BIG_LADDER:.0f})" if o["big_ladder"] else ""
+            bl = o.get("big_ladder", 0)
+            if isinstance(bl, bool):
+                bl = 1 if bl else 0
+            if bl > 1:
+                fee, _ = calc_big_ladder_surcharge(bl)
+                ladder = f" (incl. Big Ladder {bl} blinds = ${fee:.0f})"
+            elif bl == 1:
+                ladder = f" (incl. Big Ladder ${DEALER_BIG_LADDER_FIRST:.0f})"
+            else:
+                ladder = ""
             counts = f"{o['installs']}I, {o['uninstalls']}U, {o['reworks']}R"
             lines.append(
                 f"    {o['order_number']}  [{counts}]  "
@@ -1119,11 +1235,16 @@ def _build_mir_html(
     for installer, data in sorted(installer_ledger.items()):
         order_rows = ""
         for o in data["orders"]:
-            ladder_html = (
-                '<span style="color:#ffb300;font-weight:700;">🔺 +$20</span>'
-                if o["big_ladder"] else
-                '<span style="color:rgba(255,255,255,0.35);">—</span>'
-            )
+            bl = o.get("big_ladder", 0)
+            if isinstance(bl, bool):
+                bl = 1 if bl else 0
+            if bl > 1:
+                _, fee = calc_big_ladder_surcharge(bl)
+                ladder_html = f'<span style="color:#ffb300;font-weight:700;">🔺 {bl}x (+${fee:.0f})</span>'
+            elif bl == 1:
+                ladder_html = '<span style="color:#ffb300;font-weight:700;">🔺 +$20</span>'
+            else:
+                ladder_html = '<span style="color:rgba(255,255,255,0.35);">—</span>'
             order_rows += f"""
               <tr>
                 <td style="padding:7px 12px;border-bottom:1px solid rgba(255,255,255,0.08);">{o['order_number']}</td>
@@ -1168,11 +1289,16 @@ def _build_mir_html(
     for dealer, data in sorted(dealer_ledger.items()):
         order_rows = ""
         for o in data["orders"]:
-            ladder_html = (
-                '<span style="color:#e65100;font-weight:700;">🔺 +$25</span>'
-                if o["big_ladder"] else
-                '<span style="color:#ccc;">—</span>'
-            )
+            bl = o.get("big_ladder", 0)
+            if isinstance(bl, bool):
+                bl = 1 if bl else 0
+            if bl > 1:
+                fee, _ = calc_big_ladder_surcharge(bl)
+                ladder_html = f'<span style="color:#e65100;font-weight:700;">🔺 {bl}x (+${fee:.0f})</span>'
+            elif bl == 1:
+                ladder_html = '<span style="color:#e65100;font-weight:700;">🔺 +$25</span>'
+            else:
+                ladder_html = '<span style="color:#ccc;">—</span>'
             order_rows += f"""
               <tr>
                 <td style="padding:7px 12px;border-bottom:1px solid #f0f0f0;">{o['order_number']}</td>

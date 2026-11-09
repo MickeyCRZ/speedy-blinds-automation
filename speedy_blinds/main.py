@@ -48,16 +48,18 @@ def banner(company_label: str = ""):
 
 
 def choose_mode() -> str:
-    """Prompt the user to select a mode. Returns 'orders', 'mir', or 'bulk'."""
+    """Prompt the user to select a mode. Returns 'orders', 'mir', 'bulk', 'review', 'rework', 'check', or 'web'."""
     print(BOLD("What would you like to do?"))
     print("  [1] Process WhatsApp Orders")
     print("  [2] MIR Calculate")
     print("  [3] Bulk Mark Orders Completed")
     print("  [4] Review Prices")
     print("  [5] Process Reworks")
+    print("  [6] Check Prices")
+    print("  [7] Launch Web Application (Browser)")
     print()
     while True:
-        raw = input("Enter number or mode (orders/mir/bulk/review/rework): ").strip().lower()
+        raw = input("Enter number or mode (orders/mir/bulk/review/rework/check/web): ").strip().lower()
         if raw in ("1", "orders", "order", "whatsapp"):
             return "orders"
         if raw in ("2", "mir", "mir calculate", "calculate"):
@@ -68,7 +70,11 @@ def choose_mode() -> str:
             return "review"
         if raw in ("5", "rework", "reworks", "process reworks"):
             return "rework"
-        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1, 2, 3, 4, or 5."))
+        if raw in ("6", "check", "check prices"):
+            return "check"
+        if raw in ("7", "web", "browser", "app"):
+            return "web"
+        print(RED(f"  Unrecognised choice '{raw}'. Please enter 1, 2, 3, 4, 5, 6, or 7."))
 
 
 def choose_company() -> str:
@@ -400,13 +406,45 @@ def main():
         action="store_true",
         help="Parse orders and fetch ERP prices but do NOT write to Google Sheets",
     )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Launch the web application directly in your browser",
+    )
+    parser.add_argument(
+        "--port", "-p",
+        type=int,
+        default=5001,
+        help="Port for the web application (default: 5001)",
+    )
     args = parser.parse_args()
+
+    if args.web:
+        banner("Web Application")
+        from pathlib import Path
+        import sys
+        root_dir = Path(__file__).parent.parent
+        sys.path.insert(0, str(root_dir))
+        import app
+        print(GREEN(f"✓ Starting Web Application at http://127.0.0.1:{args.port}\n"))
+        app.app.run(host="127.0.0.1", port=args.port)
+        return
 
     banner()
 
     # ── Mode selection ────────────────────────────────────────────────────────
     mode = choose_mode()
     print()
+
+    if mode == "web":
+        from pathlib import Path
+        import sys
+        root_dir = Path(__file__).parent.parent
+        sys.path.insert(0, str(root_dir))
+        import app
+        print(GREEN(f"✓ Starting Web Application at http://127.0.0.1:{args.port}\n"))
+        app.app.run(host="127.0.0.1", port=args.port)
+        return
 
     if mode == "mir":
         # MIR mode: select company first, then run MIR
@@ -440,6 +478,14 @@ def main():
         print(GREEN(f"\n✓ Company set to: {company_label}"))
         print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
         rework_processor.process_reworks()
+    elif mode == "check":
+        import price_checker
+        company_key = choose_company()
+        config.set_company(company_key)
+        company_label = config.COMPANY[company_key]["label"]
+        print(GREEN(f"\n✓ Company set to: {company_label}"))
+        print(GREEN(f"  ERP: {config.ERP_BASE_URL}\n"))
+        price_checker.run_price_checker()
     else:
         _run_order_mode(args)
 
