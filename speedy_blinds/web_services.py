@@ -217,12 +217,20 @@ def parse_and_enrich_orders(raw_text: str, company_key: str | None = None) -> di
     }
 
 
-def push_orders_to_sheets(orders: list[dict[str, Any]], company_key: str | None = None) -> dict[str, Any]:
+def push_orders_to_sheets(
+    orders: list[dict[str, Any]],
+    company_key: str | None = None,
+    send_email: bool = True,
+) -> dict[str, Any]:
     """
-    Push selected orders to Google Sheets.
+    Push selected orders to Google Sheets and dispatch HTML summary email.
     """
     if company_key:
         set_active_company(company_key)
+
+    report = notifier.RunReport()
+    report.orders_extracted = len(orders)
+    report.orders_selected = len(orders)
 
     written = []
     unmatched = []
@@ -231,15 +239,23 @@ def push_orders_to_sheets(orders: list[dict[str, Any]], company_key: str | None 
     for order in orders:
         dealer = order.get("dealer", "UNKNOWN")
         on_num = order.get("order_number", "?")
+
+        # Track missing price for summary reporting
+        if not order.get("price") and order.get("type") != "rework":
+            report.prices_not_found.append(on_num)
+
         try:
             result = sheets.write_order(order)
             updated_range = result.get("updates", {}).get("updatedRange", "OK")
-            written.append({
+            written_item = {
+                **order,
                 "order_number": on_num,
                 "dealer": dealer,
                 "range": updated_range,
                 "status": "success",
-            })
+            }
+            written.append(written_item)
+            report.written.append(written_item)
         except ValueError as exc:
             err_msg = str(exc)
             if "No spreadsheet ID configured" in err_msg:
@@ -248,23 +264,54 @@ def push_orders_to_sheets(orders: list[dict[str, Any]], company_key: str | None 
                     "dealer": dealer,
                     "error": err_msg,
                 })
+                report.unmatched_dealers.append(order)
             else:
                 errors.append({
                     "order_number": on_num,
                     "dealer": dealer,
                     "error": err_msg,
                 })
+                report.errors.append({
+                    "dealer": dealer,
+                    "order_number": on_num,
+                    "error": err_msg,
+                })
         except Exception as exc:
+            err_msg = str(exc)
             errors.append({
                 "order_number": on_num,
                 "dealer": dealer,
-                "error": str(exc),
+                "error": err_msg,
+            })
+            report.errors.append({
+                "dealer": dealer,
+                "order_number": on_num,
+                "error": err_msg,
             })
 
     # Save unmatched to disk if any
-    if unmatched:
-        report = notifier.RunReport()
-        report.save_unmatched(unmatched)
+    if report.unmatched_dealers:
+        report.save_unmatched(report.unmatched_dealers)
+
+    has_failures = bool(errors or unmatched)
+    email_sent = False
+    email_error = None
+    prompt_summary_email = False
+    email_to = getattr(config, "NOTIFY_EMAIL_TO", "")
+
+    if send_email and (written or errors or unmatched):
+        if not has_failures and written:
+            # 100% success — dispatch immediately
+            try:
+                dispatch_res = report.dispatch()
+                email_sent = dispatch_res.get("email_sent", False)
+                email_error = dispatch_res.get("email_error")
+                email_to = dispatch_res.get("email_to", email_to)
+            except Exception as exc:
+                email_error = str(exc)
+        else:
+            # When any order fails to push to sheets: hold email and prompt user
+            prompt_summary_email = True
 
     return {
         "written": written,
@@ -273,6 +320,57 @@ def push_orders_to_sheets(orders: list[dict[str, Any]], company_key: str | None 
         "total_written": len(written),
         "total_unmatched": len(unmatched),
         "total_errors": len(errors),
+        "email_sent": email_sent,
+        "prompt_summary_email": prompt_summary_email,
+        "email_to": email_to,
+        "email_error": email_error,
+    }
+
+
+def send_orders_summary_email(
+    written_orders: list[dict[str, Any]],
+    failed_orders: list[dict[str, Any]] | None = None,
+    company_key: str | None = None,
+) -> dict[str, Any]:
+    """
+    Send or re-send the daily HTML summary email for specified orders
+    without writing or modifying anything in Google Sheets.
+    Failed orders can be included so their blinds and revenue are counted in the daily totals.
+    """
+    if company_key:
+        set_active_company(company_key)
+
+    report = notifier.RunReport()
+    all_summary_orders = []
+
+    for w in (written_orders or []):
+        all_summary_orders.append(w)
+        report.written.append(w)
+
+    for f in (failed_orders or []):
+        f_copy = {**f, "_unpushed": True}
+        all_summary_orders.append(f_copy)
+        report.written.append(f_copy)
+        err = f.get("_sheet_error") or f.get("error") or "Failed to push to sheet"
+        report.errors.append({
+            "dealer": f.get("dealer", "?"),
+            "order_number": f.get("order_number", "?"),
+            "error": err,
+        })
+
+    report.orders_extracted = len(all_summary_orders)
+    report.orders_selected = len(all_summary_orders)
+
+    dispatch_res = report.dispatch()
+
+    return {
+        "success": True,
+        "email_sent": dispatch_res.get("email_sent", False),
+        "email_to": dispatch_res.get("email_to", getattr(config, "NOTIFY_EMAIL_TO", "")),
+        "email_error": dispatch_res.get("email_error"),
+        "total_orders": len(all_summary_orders),
+        "written_count": len(written_orders or []),
+        "failed_count": len(failed_orders or []),
     }
 
 

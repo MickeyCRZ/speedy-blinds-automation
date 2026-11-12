@@ -128,6 +128,21 @@ def _order_to_row(order: dict) -> list:
         return [month_str] + base_row
 
 
+def col_to_num(col: str) -> int:
+    num = 0
+    for ch in col.upper():
+        num = num * 26 + (ord(ch) - ord('A') + 1)
+    return num
+
+
+def num_to_col(num: int) -> str:
+    s = ""
+    while num > 0:
+        num, r = divmod(num - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
 def _build_order_row_and_range(order: dict, next_row: int, cfg: dict | None = None, sheet_type: str = "new") -> tuple[list, str]:
     """
     Build the contiguous row values array and target range string based on configured columns.
@@ -193,19 +208,6 @@ def _build_order_row_and_range(order: dict, next_row: int, cfg: dict | None = No
     if price_col:
         col_map[price_col] = cost_val
 
-    def col_to_num(col: str) -> int:
-        num = 0
-        for ch in col.upper():
-            num = num * 26 + (ord(ch) - ord('A') + 1)
-        return num
-
-    def num_to_col(num: int) -> str:
-        s = ""
-        while num > 0:
-            num, r = divmod(num - 1, 26)
-            s = chr(65 + r) + s
-        return s
-
     sorted_cols = sorted(col_map.keys(), key=col_to_num)
     min_col_num = col_to_num(sorted_cols[0])
     max_col_num = col_to_num(sorted_cols[-1])
@@ -221,6 +223,103 @@ def _build_order_row_and_range(order: dict, next_row: int, cfg: dict | None = No
 
     target_range = f"{tab_name}!{min_col_str}{next_row}:{max_col_str}{next_row}"
     return row_values, target_range
+
+
+def is_row_occupied(row_data: list, cfg: dict | None = None) -> bool:
+    """
+    Check if a row is genuinely occupied by an order, rework, payment, or manual note.
+    Safely ignores:
+      - Trailing running balance formulas (e.g. repeated '$3,172.13')
+      - Default zero payment formula values (e.g. '$0.00', '0.00', '$ -', '0')
+      - Empty spacer rows
+    A row is only occupied if it has at least one identifying transaction field:
+    Order #, Customer Name, Date, Month, or Notes/Comments.
+    """
+    if not row_data:
+        return False
+
+    config_dict = cfg or {}
+
+    def get_val(col_str: str | None) -> str:
+        if not col_str:
+            return ""
+        idx = col_to_num(col_str) - 1
+        if 0 <= idx < len(row_data):
+            return str(row_data[idx]).strip()
+        return ""
+
+    # 1. Primary order identifiers: Order # and Customer Name
+    order_col = config_dict.get("order_col", "D")
+    cust_col = config_dict.get("customer_col", "E")
+    order_val = get_val(order_col)
+    cust_val = get_val(cust_col)
+    if order_val or cust_val:
+        return True
+
+    # 2. Date and Month (e.g. Col C, Col B or Col A)
+    date_col = config_dict.get("date_col", "C")
+    month_col = config_dict.get("month_col", "B")
+    date_val = get_val(date_col)
+    month_val = get_val(month_col)
+    if date_val or month_val:
+        return True
+
+    # Check alternate Month position (Col A in old sheets)
+    month_alt_val = get_val("A")
+    if month_alt_val and month_alt_val.lower() in (
+        "january", "february", "march", "april", "may", "june",
+        "july", "august", "september", "october", "november", "december",
+        "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
+    ):
+        return True
+
+    # 3. Comments / Notes column (e.g. Col K or T)
+    comments_col = config_dict.get("comments_col", "K")
+    if comments_col:
+        c_val = get_val(comments_col)
+        if c_val:
+            return True
+
+    return False
+
+
+def _ensure_row_capacity(service, sheet_id: str, tab_name: str, target_row: int) -> None:
+    """
+    Ensure the spreadsheet has enough rows to accommodate target_row.
+    If target_row exceeds the sheet's row count, append additional rows automatically.
+    """
+    try:
+        clean_tab = tab_name.strip("'")
+        req_meta = service.spreadsheets().get(spreadsheetId=sheet_id)
+        sheet_meta = _execute_with_retry(req_meta)
+        target_sheet_id = None
+        current_rows = 1000
+        for s in sheet_meta.get("sheets", []):
+            props = s.get("properties", {})
+            if props.get("title") == clean_tab:
+                target_sheet_id = props.get("sheetId", 0)
+                current_rows = props.get("gridProperties", {}).get("rowCount", 1000)
+                break
+
+        if target_sheet_id is not None and target_row > current_rows:
+            rows_to_add = max(target_row - current_rows + 50, 100)
+            req_append = service.spreadsheets().batchUpdate(
+                spreadsheetId=sheet_id,
+                body={
+                    "requests": [
+                        {
+                            "appendDimension": {
+                                "sheetId": target_sheet_id,
+                                "dimension": "ROWS",
+                                "length": rows_to_add,
+                            }
+                        }
+                    ]
+                }
+            )
+            _execute_with_retry(req_append)
+    except Exception as exc:
+        print(f"  ⚠️ Warning: could not check/expand row capacity: {exc}")
 
 
 
@@ -334,22 +433,24 @@ def write_order(order: dict) -> dict:
         service = _get_service()
         
         # Find the last populated row across all columns A to M
-        # This guarantees that order lines, rework lines, EFT/Cash payments (in H/I/J/L),
-        # comments (in K), and lump-sum deposit rows are NEVER touched or overwritten!
+        # Uses is_row_occupied() to protect order lines, rework lines, EFT/Cash payments,
+        # comments, and lump-sum deposits while ignoring pre-filled formula defaults ($0.00 / running balance)
         req_get = service.spreadsheets().values().get(
             spreadsheetId=sheet_id,
-            range=f"{tab_name}!A:M"
+            range=f"'{tab_name}'!A:M"
         )
         read_result = _execute_with_retry(req_get)
         
         values = read_result.get("values", [])
         last_row = 0
         for i, row_data in enumerate(values):
-            # If ANY cell in this row is non-empty, the row is occupied and protected
-            if any(str(cell).strip() for cell in row_data):
+            if is_row_occupied(row_data, cfg=cfg):
                 last_row = i + 1
         
         next_row = max(last_row + 1, 1)
+
+        # Ensure grid capacity before writing to avoid HttpError 400 exceeds grid limits
+        _ensure_row_capacity(service, sheet_id, tab_name, next_row)
 
         row_values, target_range = _build_order_row_and_range(order, next_row, cfg=cfg, sheet_type=sheet_type)
         body = {"values": [row_values]}
@@ -364,7 +465,14 @@ def write_order(order: dict) -> dict:
                 body=body,
             )
         )
-        result = _execute_with_retry(req_update)
+        try:
+            result = _execute_with_retry(req_update)
+        except Exception as exc:
+            if "exceeds grid limits" in str(exc).lower():
+                _ensure_row_capacity(service, sheet_id, tab_name, next_row + 100)
+                result = _execute_with_retry(req_update)
+            else:
+                raise exc
         
         # Mock the updates dict structure that append() normally returns
         result["updates"] = {"updatedRange": result.get("updatedRange", target_range)}

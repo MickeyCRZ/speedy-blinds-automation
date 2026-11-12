@@ -128,11 +128,15 @@ class RunReport:
 
     # ── Gmail email ───────────────────────────────────────────────────────────
 
-    def send_email(self) -> None:
+    def send_email(self) -> bool:
         """Send a formatted HTML summary email via Gmail SMTP."""
-        if not all([NOTIFY_EMAIL_FROM, NOTIFY_EMAIL_TO, NOTIFY_EMAIL_APP_PASSWORD]):
+        email_from = getattr(config, "NOTIFY_EMAIL_FROM", "")
+        email_to = getattr(config, "NOTIFY_EMAIL_TO", "")
+        email_pwd = getattr(config, "NOTIFY_EMAIL_APP_PASSWORD", "")
+
+        if not all([email_from, email_to, email_pwd]):
             print("  ⚠️  Email notification skipped — NOTIFY_EMAIL_* not set in .env")
-            return
+            return False
 
         # Use the order date(s) from written orders, not the run date
         order_dates = sorted({o.get("date") for o in self.written if o.get("date")})
@@ -150,9 +154,12 @@ class RunReport:
         else:
             date_str = self.started_at.strftime("%Y-%m-%d")
 
+        company_label = getattr(config, "ACTIVE_COMPANY_LABEL", "Speedy Blinds")
+        unpushed_count = sum(1 for w in self.written if w.get("_unpushed"))
         subject = (
-            f"[{config.ACTIVE_COMPANY_LABEL}] {date_str} — "
-            f"{len(self.written)} written"
+            f"[{company_label}] {date_str} — "
+            f"{len(self.written)} order(s)"
+            + (f" ({unpushed_count} unpushed included)" if unpushed_count else "")
             + (" ⚠ Issues" if self.has_issues else " ✓ All good")
         )
 
@@ -161,18 +168,20 @@ class RunReport:
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject
-        msg["From"] = NOTIFY_EMAIL_FROM
-        msg["To"] = NOTIFY_EMAIL_TO
+        msg["From"] = email_from
+        msg["To"] = email_to
         msg.attach(MIMEText(plain, "plain"))
         msg.attach(MIMEText(html, "html"))
 
         try:
             with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-                server.login(NOTIFY_EMAIL_FROM, NOTIFY_EMAIL_APP_PASSWORD)
-                server.sendmail(NOTIFY_EMAIL_FROM, NOTIFY_EMAIL_TO, msg.as_string())
-            print(f"  📧 Summary email sent to {NOTIFY_EMAIL_TO}")
+                server.login(email_from, email_pwd)
+                server.sendmail(email_from, email_to, msg.as_string())
+            print(f"  📧 Summary email sent to {email_to}")
+            return True
         except Exception as exc:
             print(f"  ⚠️  Email send failed: {exc}")
+            raise exc
 
     # ── formatters ────────────────────────────────────────────────────────────
 
@@ -263,22 +272,48 @@ class RunReport:
         status_colour = "#e53935" if self.has_issues else "#43a047"
         status_text = "⚠ Issues found — review below" if self.has_issues else "✓ All good"
 
+        unpushed_count = sum(1 for w in self.written if w.get("_unpushed"))
+        written_count = len(self.written) - unpushed_count
+
         stats_rows = (
-            row("Orders extracted", str(self.orders_extracted))
-            + row("Orders selected", str(self.orders_selected))
-            + row("Written to sheets", str(len(self.written)), "#43a047")
-            + row("Skipped by user", str(len(self.skipped_user)), "#f9a825")
-            + row("Sheet errors", str(len(self.errors)), "#e53935" if self.errors else "#333")
+            row("Orders in summary", str(len(self.written)), "#43a047")
+            + row("Written to sheets", str(written_count), "#43a047")
+            + (row("Unpushed (in revenue)", str(unpushed_count), "#d97706") if unpushed_count else "")
+            + (row("Sheet write errors", str(len(self.errors)), "#e53935") if self.errors else "")
         )
 
         written_html = ""
         if self.written:
-            items = "".join(
-                f'<li style="padding:2px 0;">✓ <strong>[{w.get("dealer","?")}</strong>] '
-                f'{w.get("order_number","?")} → {w.get("range","")}</li>'
-                for w in self.written
-            )
-            written_html = f'<h3 style="color:#43a047;">Written</h3><ul>{items}</ul>'
+            items = []
+            for w in self.written:
+                if w.get("_unpushed"):
+                    err = w.get("_sheet_error") or "Manual sheet push pending"
+                    items.append(
+                        f'<li style="padding:2px 0;color:#b45309;">⚠ <strong>[{w.get("dealer","?")}]</strong> '
+                        f'{w.get("order_number","?")} — <em>Included in revenue totals ({err})</em></li>'
+                    )
+                elif w.get("range"):
+                    items.append(
+                        f'<li style="padding:2px 0;">✓ <strong>[{w.get("dealer","?")}]</strong> '
+                        f'{w.get("order_number","?")} → <code>{w.get("range")}</code></li>'
+                    )
+                else:
+                    qty = w.get("qty")
+                    amt = w.get("price") or w.get("amount")
+                    cust = w.get("customer_name")
+                    det = []
+                    if cust:
+                        det.append(str(cust))
+                    if qty:
+                        det.append(f"{qty} blinds")
+                    if amt is not None:
+                        det.append(f"${amt}")
+                    det_str = f" ({', '.join(det)})" if det else ""
+                    items.append(
+                        f'<li style="padding:2px 0;">✓ <strong>[{w.get("dealer","?")}]</strong> '
+                        f'{w.get("order_number","?")}{det_str}</li>'
+                    )
+            written_html = f'<h3 style="color:#43a047;">Orders in Summary</h3><ul>{"".join(items)}</ul>'
 
         unmatched_html = ""
         if self.unmatched_dealers:
@@ -399,6 +434,9 @@ class RunReport:
                 amt      = _to_dec(o.get("price")).quantize(TWO, rounding=ROUND_HALF_UP)
                 acc_str  = self._accessories_str(o)
 
+                is_unpushed = bool(o.get("_unpushed"))
+                unpushed_tag = '&nbsp;&nbsp;<span style="color:#ffd54f;font-size:11px;font-weight:bold;">[Sheet push pending]</span>' if is_unpushed else ''
+
                 if is_rework:
                     order_rows.append(
                         f'<div style="padding:3px 0;font-size:13px;opacity:0.8;">'
@@ -406,6 +444,7 @@ class RunReport:
                         f' <span style="opacity:0.5;">|</span> '
                         f'<strong>{dealer}</strong>'
                         f'&nbsp;&nbsp;<span style="opacity:0.72;">[RW] ${amt:,}</span>'
+                        f'{unpushed_tag}'
                         f'</div>'
                     )
                     day_rework_revenue += amt
@@ -418,6 +457,7 @@ class RunReport:
                         f' <span style="opacity:0.5;">|</span> '
                         f'{customer}: {qty}{acc_str}'
                         f'&nbsp;&nbsp;<span style="opacity:0.82;">Revenue: ${amt:,}</span>'
+                        f'{unpushed_tag}'
                         f'</div>'
                     )
                     day_qty     += qty
@@ -502,7 +542,18 @@ class RunReport:
 
     # ── send all ──────────────────────────────────────────────────────────────
 
-    def dispatch(self) -> None:
+    def dispatch(self) -> dict[str, Any]:
         """Fire both the macOS notification and the email."""
         self.send_macos_notification()
-        self.send_email()
+        email_sent = False
+        email_error = None
+        email_to = getattr(config, "NOTIFY_EMAIL_TO", "")
+        try:
+            email_sent = bool(self.send_email())
+        except Exception as exc:
+            email_error = str(exc)
+        return {
+            "email_sent": email_sent,
+            "email_error": email_error,
+            "email_to": email_to,
+        }

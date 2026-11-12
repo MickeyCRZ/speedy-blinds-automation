@@ -124,13 +124,40 @@ def api_orders_push_sheets():
     data = request.get_json(silent=True) or {}
     orders = data.get("orders", [])
     company_key = data.get("company")
+    send_email = data.get("send_email", True)
 
     if not orders:
         return jsonify({"error": "No orders provided to push"}), 400
 
     try:
-        result = web_services.push_orders_to_sheets(orders, company_key=company_key)
+        result = web_services.push_orders_to_sheets(
+            orders,
+            company_key=company_key,
+            send_email=send_email,
+        )
         return jsonify(result)
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
+
+@app.route("/api/orders/send-summary-email", methods=["POST"])
+def api_orders_send_summary_email():
+    data = request.get_json(silent=True) or {}
+    orders = data.get("orders", [])
+    failed_orders = data.get("failed_orders", [])
+    include_failed = data.get("include_failed", True)
+    company_key = data.get("company")
+
+    if not orders and not failed_orders:
+        return jsonify({"error": "No orders provided for summary email"}), 400
+
+    try:
+        res = web_services.send_orders_summary_email(
+            written_orders=orders,
+            failed_orders=failed_orders if include_failed else [],
+            company_key=company_key,
+        )
+        return jsonify(res)
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
 

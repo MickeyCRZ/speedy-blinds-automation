@@ -755,11 +755,13 @@ def push_payment_to_sheet(payment: dict[str, Any]) -> dict[str, Any]:
         all_vals = res_all.get("values", [])
         last_row = 0
         for i, r in enumerate(all_vals):
-            # If ANY cell in this row has content, it is occupied and protected
-            if any(str(c).strip() for c in r):
+            if sheets.is_row_occupied(r, cfg=cfg):
                 last_row = i + 1
 
         next_row = max(last_row + 1, 1)
+
+        # Ensure grid capacity before writing to avoid HttpError 400 exceeds grid limits
+        sheets._ensure_row_capacity(service, sheet_id, tab_name, next_row)
 
         # Parse date for Month and Date columns
         month_str = ""

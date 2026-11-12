@@ -118,8 +118,19 @@ document.addEventListener("alpine:init", () => {
         ordersLoading: false,
         ordersPushLoading: false,
         ordersCompleteLoading: false,
+        ordersEmailLoading: false,
         ordersSelectAll: true,
         ordersFilter: "all", // all, orders, reworks, missing_price
+        sendSummaryEmail: true,
+
+        failedOrdersModal: {
+            show: false,
+            writtenOrders: [],
+            failedOrders: [],
+            totalWritten: 0,
+            totalFailed: 0,
+            sending: false,
+        },
 
         get filteredOrders() {
             if (this.ordersFilter === "orders") {
@@ -212,6 +223,7 @@ Total blinds = 59`;
                 const res = await this.apiCall("/api/orders/push-sheets", "POST", {
                     orders: selected,
                     company: this.activeCompany,
+                    send_email: Boolean(this.sendSummaryEmail),
                 });
 
                 // Update row statuses
@@ -240,11 +252,88 @@ Total blinds = 59`;
                 let msg = `Successfully pushed ${res.total_written} order(s) to Google Sheets.`;
                 if (res.total_unmatched > 0) msg += ` (${res.total_unmatched} unknown dealer)`;
                 if (res.total_errors > 0) msg += ` (${res.total_errors} errors)`;
+                if (res.email_sent) {
+                    msg += ` 📧 Summary email sent to ${res.email_to || 'inbox'}`;
+                } else if (res.email_error) {
+                    msg += ` ⚠️ (Email alert failed: ${res.email_error})`;
+                }
                 this.showToast(msg, res.total_errors > 0 ? "warning" : "success");
+
+                // If any order failed, prompt user whether to include failed order(s) in summary email
+                if (res.prompt_summary_email && (res.total_errors > 0 || res.total_unmatched > 0)) {
+                    const writtenSet = new Set((res.written || []).map(w => w.order_number));
+                    const errorDetails = new Map();
+                    (res.errors || []).forEach(e => errorDetails.set(e.order_number, e.error));
+                    (res.unmatched || []).forEach(u => errorDetails.set(u.order_number, u.error));
+
+                    this.failedOrdersModal.writtenOrders = selected.filter(o => writtenSet.has(o.order_number));
+                    this.failedOrdersModal.failedOrders = selected.filter(o => errorDetails.has(o.order_number)).map(o => ({
+                        ...o,
+                        _sheet_error: errorDetails.get(o.order_number) || "Failed to push to sheet",
+                    }));
+                    this.failedOrdersModal.totalWritten = res.total_written;
+                    this.failedOrdersModal.totalFailed = res.total_errors + res.total_unmatched;
+                    this.failedOrdersModal.show = true;
+                }
             } catch (err) {
                 this.showToast(err.message, "error");
             } finally {
                 this.ordersPushLoading = false;
+            }
+        },
+
+        async confirmSummaryEmail(includeFailed) {
+            this.failedOrdersModal.sending = true;
+            try {
+                const res = await this.apiCall("/api/orders/send-summary-email", "POST", {
+                    orders: this.failedOrdersModal.writtenOrders,
+                    failed_orders: this.failedOrdersModal.failedOrders,
+                    include_failed: includeFailed,
+                    company: this.activeCompany,
+                });
+                this.failedOrdersModal.show = false;
+                if (res.email_sent) {
+                    const note = includeFailed ? "including unpushed order in revenue totals" : "pushed orders only";
+                    this.showToast(`📧 Summary email sent to ${res.email_to} (${note})`, "success");
+                } else if (res.email_error) {
+                    this.showToast(`Email warning: ${res.email_error}`, "warning");
+                }
+            } catch (err) {
+                this.showToast("Failed to send summary email: " + err.message, "error");
+            } finally {
+                this.failedOrdersModal.sending = false;
+            }
+        },
+
+        closeFailedOrdersModal() {
+            this.failedOrdersModal.show = false;
+        },
+
+        async sendManualSummaryEmail() {
+            const targets = this.selectedOrders.length > 0 ? this.selectedOrders : this.ordersList;
+            if (targets.length === 0) {
+                this.showToast("No orders available to summarize", "warning");
+                return;
+            }
+            if (!confirm(`Send summary email for ${targets.length} order(s) without pushing to sheets?`)) {
+                return;
+            }
+            this.ordersEmailLoading = true;
+            try {
+                const res = await this.apiCall("/api/orders/send-summary-email", "POST", {
+                    orders: targets,
+                    company: this.activeCompany,
+                    include_failed: false,
+                });
+                if (res.email_sent) {
+                    this.showToast(`📧 Summary email successfully sent to ${res.email_to}`, "success");
+                } else {
+                    this.showToast(`Email status: ${res.email_error || 'Not sent'}`, "warning");
+                }
+            } catch (err) {
+                this.showToast(err.message, "error");
+            } finally {
+                this.ordersEmailLoading = false;
             }
         },
 

@@ -6,7 +6,7 @@ import json
 from unittest.mock import MagicMock, patch
 import pytest
 
-from speedy_blinds import dealers_manager, payments_service
+from speedy_blinds import dealers_manager, payments_service, sheets
 from app import app
 
 
@@ -556,6 +556,107 @@ def test_whatsapp_order_target_columns_configurable():
     assert row_cust[4] == "John Smith"   # F
     assert row_cust[5] == 3              # G
     assert row_cust[6] == 450.50         # H
+
+
+def test_is_row_occupied_distinguishes_real_orders_from_dragged_formulas():
+    cfg = {
+        "month_col": "B",
+        "date_col": "C",
+        "order_col": "D",
+        "customer_col": "E",
+        "qty_col": "F",
+        "price_col": "G",
+        "eft_col": "H",
+        "cash_col": "I",
+        "comments_col": "K",
+    }
+
+    # Jerin row 66: real order
+    row_66 = ['60', 'November', 'Nov 6, 2026', 'ORD-0608', 'Jerin', '10', '$1,050.00', '-$3,000.00', '$3,172.13']
+    assert sheets.is_row_occupied(row_66, cfg) is True
+
+    # Jerin rows 67-1061: dragged balance formula with $0.00 in H and carried balance in I
+    row_67 = ['', '', '', '', '', '', '', '$0.00', '$3,172.13']
+    assert sheets.is_row_occupied(row_67, cfg) is False
+
+    row_zero_variants = ['', '', '', '', '', '', '', '$ -', '$3,172.13']
+    assert sheets.is_row_occupied(row_zero_variants, cfg) is False
+
+    # Lump sum row
+    row_lump = ['', 'November', 'Nov 9, 2026', 'LUMP-SUM', '', '', '', '$3,000.00', '']
+    assert sheets.is_row_occupied(row_lump, cfg) is True
+
+    # Real standalone payment in Col H with date
+    row_payment_only = ['', '', 'Nov 9, 2026', '', '', '', '', '$500.00', '']
+    assert sheets.is_row_occupied(row_payment_only, cfg) is True
+
+    # Blank row
+    assert sheets.is_row_occupied([], cfg) is False
+    assert sheets.is_row_occupied(['', '', ''], cfg) is False
+
+
+def test_write_order_targets_row_after_real_order_ignoring_formula_rows(monkeypatch):
+    """Ensure write_order finds row 67 instead of row 1062 when formulas are dragged to row 1061."""
+    captured_updates = []
+
+    class MockValues:
+        def get(self, spreadsheetId, **kwargs):
+            class Req:
+                def execute(self):
+                    # Mock rows 1 to 100:
+                    # Rows 1-66 occupied, rows 67-100 have only $0.00 and $3,172.13
+                    rows = []
+                    for k in range(1, 67):
+                        rows.append(['', 'Nov', 'Nov 1', f'ORD-{1000+k}', 'Customer', '5', '$500.00', '$0.00', '$1000.00'])
+                    for k in range(67, 100):
+                        rows.append(['', '', '', '', '', '', '', '$0.00', '$3,172.13'])
+                    return {"values": rows}
+            return Req()
+
+        def update(self, spreadsheetId, **kwargs):
+            captured_updates.append({"range": kwargs.get("range"), "body": kwargs.get("body")})
+            class Req:
+                def execute(self):
+                    return {"updatedRange": kwargs.get("range")}
+            return Req()
+
+    class MockSpreadsheets:
+        def values(self):
+            return MockValues()
+        def get(self, spreadsheetId):
+            class Req:
+                def execute(self):
+                    return {"sheets": [{"properties": {"title": "2026", "sheetId": 0, "gridProperties": {"rowCount": 100}}}]}
+            return Req()
+        def batchUpdate(self, spreadsheetId, body):
+            class Req:
+                def execute(self):
+                    return {}
+            return Req()
+
+    class MockService:
+        def spreadsheets(self):
+            return MockSpreadsheets()
+
+    monkeypatch.setattr(sheets, "_get_service", lambda: MockService())
+
+    order = {
+        "order_number": "ORD-0700",
+        "dealer": "Jerin",
+        "customer_name": "New Customer",
+        "qty": 8,
+        "price": 850.0,
+        "date": "2026-11-12",
+        "month": "November",
+        "type": "order",
+    }
+
+    result = sheets.write_order(order)
+    assert len(captured_updates) == 1
+    # Jerin is row 67 (66 occupied orders + 1)!
+    assert "67" in captured_updates[0]["range"]
+    assert "100" not in captured_updates[0]["range"]
+    assert "101" not in captured_updates[0]["range"]
 
 
 

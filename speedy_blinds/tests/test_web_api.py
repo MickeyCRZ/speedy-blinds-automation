@@ -174,3 +174,134 @@ class TestInputValidations:
     def test_reworks_empty_range(self, client):
         res = client.post("/api/reworks/process", json={"range": ""})
         assert res.status_code == 400
+
+
+class TestOrdersPushSheetsAndEmail:
+    def test_orders_push_sheets_dispatches_summary_email(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+        import web_services
+
+        # Mock sheets write in web_services
+        monkeypatch.setattr(
+            web_services.sheets,
+            "write_order",
+            lambda o: {"updates": {"updatedRange": "'2026'!B10:G10"}},
+        )
+
+        # Mock RunReport.dispatch in web_services
+        dispatch_mock = MagicMock(return_value={
+            "email_sent": True,
+            "email_to": "notifications@example.com",
+            "email_error": None,
+        })
+        monkeypatch.setattr(web_services.notifier.RunReport, "dispatch", dispatch_mock)
+
+        order_payload = [{
+            "order_number": "ORD-0246",
+            "dealer": "VT Thomas",
+            "date": "2026-06-09",
+            "customer_name": "benni",
+            "qty": 17,
+            "price": 250.0,
+            "type": "order",
+        }]
+
+        res = client.post(
+            "/api/orders/push-sheets",
+            json={"orders": order_payload, "company": "speedy", "send_email": True},
+        )
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["total_written"] == 1
+        assert data["email_sent"] is True
+        assert data["email_to"] == "notifications@example.com"
+        assert dispatch_mock.called
+
+    def test_orders_push_sheets_can_skip_email_when_flag_false(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+        import web_services
+
+        monkeypatch.setattr(
+            web_services.sheets,
+            "write_order",
+            lambda o: {"updates": {"updatedRange": "'2026'!B11:G11"}},
+        )
+        dispatch_mock = MagicMock()
+        monkeypatch.setattr(web_services.notifier.RunReport, "dispatch", dispatch_mock)
+
+        order_payload = [{
+            "order_number": "ORD-0198",
+            "dealer": "Alen",
+            "date": "2026-06-09",
+            "customer_name": "Shakeel",
+            "qty": 4,
+            "price": 120.0,
+            "type": "order",
+        }]
+
+        res = client.post(
+            "/api/orders/push-sheets",
+            json={"orders": order_payload, "company": "speedy", "send_email": False},
+        )
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["total_written"] == 1
+        assert data["email_sent"] is False
+        assert not dispatch_mock.called
+
+    def test_orders_push_holds_email_and_prompts_when_error_occurs(self, client, monkeypatch):
+        import web_services
+
+        def mock_write(o):
+            if o.get("order_number") == "ORD-0608":
+                raise RuntimeError("Range exceeds grid limits")
+            return {"updates": {"updatedRange": "'2026'!B12:G12"}}
+
+        monkeypatch.setattr(web_services.sheets, "write_order", mock_write)
+
+        orders = [
+            {"order_number": "ORD-0535", "dealer": "Phil", "date": "2026-11-06", "qty": 9, "price": 1245.0, "type": "order"},
+            {"order_number": "ORD-0608", "dealer": "Jerin", "date": "2026-11-06", "qty": 10, "price": 1050.0, "type": "order"},
+        ]
+
+        res = client.post(
+            "/api/orders/push-sheets",
+            json={"orders": orders, "company": "inspira", "send_email": True},
+        )
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["total_written"] == 1
+        assert data["total_errors"] == 1
+        assert data["prompt_summary_email"] is True
+        assert data["email_sent"] is False
+
+    def test_send_summary_email_api_includes_failed_orders_in_totals(self, client, monkeypatch):
+        from unittest.mock import MagicMock
+        import web_services
+
+        dispatch_mock = MagicMock(return_value={
+            "email_sent": True,
+            "email_to": "admin@example.com",
+            "email_error": None,
+        })
+        monkeypatch.setattr(web_services.notifier.RunReport, "dispatch", dispatch_mock)
+
+        written = [
+            {"order_number": "ORD-0535", "dealer": "Phil", "date": "2026-11-06", "qty": 9, "price": 1245.0, "type": "order"}
+        ]
+        failed = [
+            {"order_number": "ORD-0608", "dealer": "Jerin", "date": "2026-11-06", "qty": 10, "price": 1050.0, "type": "order", "_sheet_error": "Grid limit"}
+        ]
+
+        res = client.post(
+            "/api/orders/send-summary-email",
+            json={"orders": written, "failed_orders": failed, "include_failed": True, "company": "inspira"},
+        )
+        assert res.status_code == 200
+        data = res.get_json()
+        assert data["success"] is True
+        assert data["email_sent"] is True
+        assert data["total_orders"] == 2
+        assert data["written_count"] == 1
+        assert data["failed_count"] == 1
+        assert dispatch_mock.called
