@@ -304,9 +304,10 @@ def _run_order_mode(args) -> None:
         for order in orders:
             order.setdefault("price", None)
 
-    # Track orders where price wasn't found
+    # Track orders where price wasn't found (neither text amount nor ERP price)
     report.prices_not_found = [
-        o.get("order_number", "?") for o in orders if o.get("price") is None
+        o.get("order_number", "?") for o in orders
+        if (o.get("amount") is None and o.get("price") is None and str(o.get("type") or "").lower() != "rework")
     ]
 
     display_orders(orders)

@@ -140,7 +140,10 @@ document.addEventListener("alpine:init", () => {
                 return this.ordersList.filter(o => o.type === "rework");
             }
             if (this.ordersFilter === "missing_price") {
-                return this.ordersList.filter(o => o.price === null || o.price === undefined);
+                return this.ordersList.filter(o => 
+                    (o.price === null || o.price === undefined) &&
+                    (o.amount === null || o.amount === undefined)
+                );
             }
             return this.ordersList;
         },

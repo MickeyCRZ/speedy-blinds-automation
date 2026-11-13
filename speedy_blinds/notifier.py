@@ -219,11 +219,12 @@ class RunReport:
                     dealer = o.get("dealer", "?")
                     customer = o.get("customer_name", "?")
                     qty = o.get("qty") or 0
-                    amt = o.get("price") or 0.0
+                    final_val = o.get("amount") if o.get("amount") is not None else o.get("price")
+                    amt = float(final_val) if final_val is not None else 0.0
                     acc = self._accessories_str(o)
                     lines.append(f"  {on} | {dealer} | {customer}: {qty}{acc}  Revenue: ${amt:,.2f}")
                     day_qty += qty
-                    day_revenue += float(amt)
+                    day_revenue += amt
                     for key in ("motors", "remotes", "solars", "chargers"):
                         v = o.get(key)
                         if v:
@@ -299,7 +300,8 @@ class RunReport:
                     )
                 else:
                     qty = w.get("qty")
-                    amt = w.get("price") or w.get("amount")
+                    final_val = w.get("amount") if w.get("amount") is not None else w.get("price")
+                    amt = final_val
                     cust = w.get("customer_name")
                     det = []
                     if cust:
@@ -431,7 +433,8 @@ class RunReport:
                 dealer   = o.get("dealer", "?")
                 customer = o.get("customer_name") or ("—" if is_rework else "?")
                 qty      = int(o.get("qty") or 0)
-                amt      = _to_dec(o.get("price")).quantize(TWO, rounding=ROUND_HALF_UP)
+                final_val = o.get("amount") if o.get("amount") is not None else o.get("price")
+                amt      = _to_dec(final_val).quantize(TWO, rounding=ROUND_HALF_UP)
                 acc_str  = self._accessories_str(o)
 
                 is_unpushed = bool(o.get("_unpushed"))

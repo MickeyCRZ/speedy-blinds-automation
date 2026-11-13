@@ -195,8 +195,8 @@ def parse_and_enrich_orders(raw_text: str, company_key: str | None = None) -> di
 
     regular_count = sum(1 for o in orders if o.get("type") != "rework")
     rework_count = sum(1 for o in orders if o.get("type") == "rework")
-    prices_found = sum(1 for o in orders if o.get("price") is not None)
-    missing_prices = sum(1 for o in orders if o.get("price") is None)
+    prices_found = sum(1 for o in orders if (o.get("amount") is not None or o.get("price") is not None))
+    missing_prices = sum(1 for o in orders if (o.get("amount") is None and o.get("price") is None))
 
     # Decorate with dealer validity
     for o in orders:
@@ -240,8 +240,9 @@ def push_orders_to_sheets(
         dealer = order.get("dealer", "UNKNOWN")
         on_num = order.get("order_number", "?")
 
-        # Track missing price for summary reporting
-        if not order.get("price") and order.get("type") != "rework":
+        # Track missing price for summary reporting (only if neither text amount nor ERP price exists)
+        final_val = order.get("amount") if order.get("amount") is not None else order.get("price")
+        if final_val is None and order.get("type") != "rework":
             report.prices_not_found.append(on_num)
 
         try:

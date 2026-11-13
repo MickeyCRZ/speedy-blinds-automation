@@ -467,6 +467,9 @@
                                         <!-- Amount -->
                                         <td class="p-3 text-right font-mono text-slate-700">
                                             <span x-text="order.amount !== null && order.amount !== undefined ? '$' + Number(order.amount).toFixed(2) : '—'"></span>
+                                            <template x-if="order.amount !== null && order.amount !== undefined && order.price !== null && order.price !== undefined">
+                                                <span class="ml-1 px-1 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800" title="Amount specified in WhatsApp text overrides ERP wholesale price">Override</span>
+                                            </template>
                                         </td>
 
                                         <!-- Price (ERP) -->
@@ -475,7 +478,12 @@
                                                 <span class="text-emerald-700 font-bold" x-text="'$' + Number(order.price).toFixed(2)"></span>
                                             </template>
                                             <template x-if="order.price === null || order.price === undefined">
-                                                <span class="text-rose-600 font-semibold text-xs">NOT FOUND</span>
+                                                <template x-if="order.amount !== null && order.amount !== undefined">
+                                                    <span class="text-indigo-700 font-semibold text-xs bg-indigo-50 px-1.5 py-0.5 rounded border border-indigo-200" title="Using amount specified in WhatsApp message">From Text</span>
+                                                </template>
+                                                <template x-if="order.amount === null || order.amount === undefined">
+                                                    <span class="text-rose-600 font-semibold text-xs">NOT FOUND</span>
+                                                </template>
                                             </template>
                                         </td>
 

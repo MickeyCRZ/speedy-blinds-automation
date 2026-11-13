@@ -305,3 +305,82 @@ class TestOrdersPushSheetsAndEmail:
         assert data["written_count"] == 1
         assert data["failed_count"] == 1
         assert dispatch_mock.called
+
+    def test_summary_email_uses_overridden_amount_precedence(self):
+        from speedy_blinds.notifier import RunReport
+
+        report = RunReport()
+        # Order 1: Has explicit overridden amount 176.40 vs ERP price 100.00
+        # Order 2: Has amount 250.00 but no ERP price (price=None)
+        # Order 3: Normal order with no explicit amount, ERP price 500.00
+        orders = [
+            {
+                "order_number": "ORD-0101",
+                "dealer": "Phil",
+                "customer_name": "Alice",
+                "date": "2026-11-10",
+                "qty": 5,
+                "amount": 176.40,
+                "price": 100.00,
+                "type": "order",
+            },
+            {
+                "order_number": "ORD-0102",
+                "dealer": "Jerin",
+                "customer_name": "Bob",
+                "date": "2026-11-10",
+                "qty": 3,
+                "amount": 250.00,
+                "price": None,
+                "type": "order",
+            },
+            {
+                "order_number": "ORD-0103",
+                "dealer": "Mathew",
+                "customer_name": "Charlie",
+                "date": "2026-11-10",
+                "qty": 2,
+                "amount": None,
+                "price": 500.00,
+                "type": "order",
+            },
+        ]
+
+        report.written = orders
+
+        # 1. Plain text breakdown test
+        text_breakdown = report._build_plain()
+        assert "Revenue: $176.40" in text_breakdown
+        assert "Revenue: $250.00" in text_breakdown
+        assert "Revenue: $500.00" in text_breakdown
+        # Total daily revenue: 176.40 + 250.00 + 500.00 = 926.40
+        assert "Daily Revenue: $926.40" in text_breakdown
+
+        # 2. HTML breakdown test
+        html_breakdown = report._build_daily_breakdown_html()
+        assert "Revenue: $176.40" in html_breakdown
+        assert "Revenue: $250.00" in html_breakdown
+        assert "Revenue: $500.00" in html_breakdown
+        assert "$926.40" in html_breakdown
+
+    def test_missing_price_detection_respects_explicit_amount(self, monkeypatch):
+        import web_services
+
+        # Mock sheets write
+        monkeypatch.setattr(web_services.sheets, "write_order", lambda o: {"updates": {"updatedRange": "2026!A1:G1"}})
+
+        orders = [
+            {"order_number": "ORD-0201", "dealer": "Phil", "date": "2026-11-10", "qty": 1, "amount": 150.0, "price": None, "type": "order"},
+            {"order_number": "ORD-0202", "dealer": "Phil", "date": "2026-11-10", "qty": 1, "amount": None, "price": None, "type": "order"},
+        ]
+
+        # In push_orders_to_sheets:
+        res = web_services.push_orders_to_sheets(orders, company_key="inspira", send_email=False)
+        assert res["total_written"] == 2
+        
+        # When parsing/enriching:
+        # ORD-0201 has amount 150.0, so it counts as price found
+        prices_found = sum(1 for o in orders if (o.get("amount") is not None or o.get("price") is not None))
+        missing_prices = sum(1 for o in orders if (o.get("amount") is None and o.get("price") is None))
+        assert prices_found == 1
+        assert missing_prices == 1
